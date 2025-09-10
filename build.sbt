@@ -9,6 +9,7 @@ ThisBuild / developers ++= List(
 )
 ThisBuild / startYear := Some(2023)
 ThisBuild / tlSonatypeUseLegacyHost := false
+ThisBuild / resolvers += Resolver.sonatypeCentralSnapshots
 
 ThisBuild / crossScalaVersions := Seq("3.3.4", "2.13.16")
 
