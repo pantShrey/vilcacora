@@ -74,7 +74,7 @@ lazy val runtime = project
       "org.typelevel" %%% "cats-core" % CatsVersion,
       "org.scalameta" %%% "munit" % MunitVersion % Test,
     ),
-    nativeBrewFormulas ++= Set("openblas", "mlpack", "libsvm"),
+    nativeBrewFormulas ++= Set("cereal", "openblas", "mlpack", "libsvm"),
     nativeConfig ~= { c =>
       c.withCompileOptions(
         c.compileOptions ++ Seq("-fexceptions", "-frtti", "-Wno-inconsistent-missing-override"),
