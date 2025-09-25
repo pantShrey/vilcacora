@@ -18,91 +18,92 @@ package com.armanbilge.vilcacora.runtime
 
 import scala.scalanative.unsafe._
 
-/** Scala Native bindings for MLPack C++ wrapper functions
-  *
-  * All operations are single-inference with no batching or threading.
+/** Scala Native bindings for MLPack C++ wrapper functions Two-phase operations: initialization and
+  * execution
   */
 @linkCppRuntime
 @extern
 object MLPack {
 
-  /** Direct convolution - no struct overhead, writes to pre-allocated output */
-  def F_perform_convolution_direct(
-      // Parameters passed directly
-      num_output_maps: CSize,
-      kernel_height: CSize,
-      kernel_width: CSize,
-      stride_height: CSize,
-      stride_width: CSize,
-      auto_pad: CInt,
-      use_bias: CInt,
+  /* opaque handle types */
+  type ConvHandleF = Ptr[Byte]
+  type ConvHandleD = Ptr[Byte]
+  type PoolHandleF = Ptr[Byte]
+  type PoolHandleD = Ptr[Byte]
+  type SoftmaxF = Ptr[Byte]
+  type SoftmaxD = Ptr[Byte]
 
-      // Data pointers
-      input_ptr: Ptr[CFloat],
-      input_height: CSize,
-      input_width: CSize,
-      input_channels: CSize,
-      kernel_ptr: Ptr[CFloat],
-      bias_ptr: Ptr[CFloat],
+  /* ---- convolution ---- */
+  def initialise_conv_f(
+      outMaps: CSize,
+      kH: CSize,
+      kW: CSize,
+      sH: CSize,
+      sW: CSize,
+      autoPad: CInt,
+      useBias: CInt,
+      inH: CSize,
+      inW: CSize,
+      inC: CSize,
+      weight: Ptr[Float],
+      bias: Ptr[Float],
+      inputPtr: Ptr[Float],
+      outputPtr: Ptr[Float],
+  ): ConvHandleF = extern
 
-      // Pre-allocated output + dimension outputs
-      output_ptr: Ptr[CFloat],
-      output_height: Ptr[CSize],
-      output_width: Ptr[CSize],
-      output_channels: Ptr[CSize],
-  ): Unit = extern
-  def perform_convolution_direct(
-      // Parameters passed directly
-      num_output_maps: CSize,
-      kernel_height: CSize,
-      kernel_width: CSize,
-      stride_height: CSize,
-      stride_width: CSize,
-      auto_pad: CInt,
-      use_bias: CInt,
-      // Data pointers
-      input_ptr: Ptr[Double],
-      input_height: CSize,
-      input_width: CSize,
-      input_channels: CSize,
-      kernel_ptr: Ptr[Double],
-      bias_ptr: Ptr[Double],
+  def execute_conv_f(h: ConvHandleF): Unit = extern
+  def cleanup_conv_f(h: ConvHandleF): Unit = extern
 
-      // Pre-allocated output + dimension outputs
-      output_ptr: Ptr[Double],
-      output_height: Ptr[CSize],
-      output_width: Ptr[CSize],
-      output_channels: Ptr[CSize],
-  ): Unit = extern
+  def initialise_conv_d(
+      outMaps: CSize,
+      kH: CSize,
+      kW: CSize,
+      sH: CSize,
+      sW: CSize,
+      autoPad: CInt,
+      useBias: CInt,
+      inH: CSize,
+      inW: CSize,
+      inC: CSize,
+      weight: Ptr[Double],
+      bias: Ptr[Double],
+      inputPtr: Ptr[Double],
+      outputPtr: Ptr[Double],
+  ): ConvHandleD = extern
 
-  def F_perform_maxpooling_direct(
-      kernel_height: CSize,
-      kernel_width: CSize,
-      stride_height: CSize,
-      stride_width: CSize,
-      input_ptr: Ptr[CFloat],
-      input_height: CSize,
-      input_width: CSize,
-      input_channels: CSize,
-      output_ptr: Ptr[CFloat],
-      output_height: Ptr[CSize],
-      output_width: Ptr[CSize],
-      output_channels: Ptr[CSize],
-  ): Unit = extern
-  def perform_maxpooling_direct(
-      kernel_height: CSize,
-      kernel_width: CSize,
-      stride_height: CSize,
-      stride_width: CSize,
-      input_ptr: Ptr[Double],
-      input_height: CSize,
-      input_width: CSize,
-      input_channels: CSize,
-      output_ptr: Ptr[Double],
-      output_height: Ptr[CSize],
-      output_width: Ptr[CSize],
-      output_channels: Ptr[CSize],
-  ): Unit = extern
+  def execute_conv_d(h: ConvHandleD): Unit = extern
+  def cleanup_conv_d(h: ConvHandleD): Unit = extern
+
+  /* ---- max-pool ---- */
+  def initialise_pool_f(
+      kH: CSize,
+      kW: CSize,
+      sH: CSize,
+      sW: CSize,
+      inH: CSize,
+      inW: CSize,
+      inC: CSize,
+      inputPtr: Ptr[Float],
+      outputPtr: Ptr[Float],
+  ): PoolHandleF = extern
+  def execute_pool_f(h: PoolHandleF): Unit = extern
+  def cleanup_pool_f(h: PoolHandleF): Unit = extern
+
+  def initialise_pool_d(
+      kH: CSize,
+      kW: CSize,
+      sH: CSize,
+      sW: CSize,
+      inH: CSize,
+      inW: CSize,
+      inC: CSize,
+      inputPtr: Ptr[Double],
+      outputPtr: Ptr[Double],
+  ): PoolHandleD = extern
+  def execute_pool_d(h: PoolHandleD): Unit = extern
+  def cleanup_pool_d(h: PoolHandleD): Unit = extern
+
+  /* ---- softmax ---- */
   def F_perform_softmax_direct(
       input_ptr: Ptr[CFloat],
       input_size: CSize,

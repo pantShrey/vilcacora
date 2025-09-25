@@ -1,177 +1,199 @@
 #include <mlpack/core.hpp>
-#include <algorithm>
 #include <mlpack/methods/ann/layer/convolution.hpp>
 #include <mlpack/methods/ann/layer/max_pooling.hpp>
-#include <iostream>
-#include <cmath>
+#include <armadillo>
+#include <cstring>
 
-using FConvolution = mlpack::ConvolutionType<
+// ---------------- type aliases ----------------
+using FConv = mlpack::ConvolutionType<
     mlpack::NaiveConvolution<mlpack::ValidConvolution>,
     mlpack::NaiveConvolution<mlpack::FullConvolution>,
     mlpack::NaiveConvolution<mlpack::ValidConvolution>,
     arma::fmat>;
 
+using DConv       = mlpack::Convolution;
 using FMaxPooling = mlpack::MaxPoolingType<arma::fmat>;
+using DMaxPooling = mlpack::MaxPooling;
+
+// ---------------- handle structs --------------
+struct ConvHandleF {
+  FConv*         layer;
+  arma::fmat     inView;
+  arma::fmat     outView;
+};
+
+struct ConvHandleD {
+  DConv*         layer;
+  arma::mat      inView;
+  arma::mat      outView;
+};
+
+struct PoolHandleF {
+  FMaxPooling*   layer;
+  arma::fmat     inView;
+  arma::fmat     outView;
+};
+
+struct PoolHandleD {
+  DMaxPooling*   layer;
+  arma::mat      inView;
+  arma::mat      outView;
+};
+
+struct SoftmaxF { arma::fmat inView, outView; };
+struct SoftmaxD { arma::mat  inView, outView; };
 
 extern "C" {
 
+// =======================================================
+//                 FLOAT 32-bit CONVOLUTION
+// =======================================================
+ConvHandleF* initialise_conv_f(
+    size_t  outMaps, size_t kH, size_t kW,
+    size_t  sH, size_t sW, int autoPad, int useBias,
+    size_t  inH, size_t inW, size_t inC,
+    const float* wPtr, const float* bPtr,
+    float* inputPtr,  float* outputPtr) {
 
-void F_perform_convolution_direct(
-    // Input parameters 
-    size_t num_output_maps, size_t kernel_height, size_t kernel_width,
-    size_t stride_height, size_t stride_width, int auto_pad, int use_bias,
-    
-    // Data pointers
-    const float* input_ptr, size_t input_height, size_t input_width, size_t input_channels,
-    const float* kernel_ptr, const float* bias_ptr,
-    
-    // Direct output - Scala allocates, C++ writes directly
-    float* output_ptr, size_t* output_height, size_t* output_width, size_t* output_channels)
-{
-    // Create input VIEW (zero copy)
-    arma::fmat inputData(const_cast<float*>(input_ptr), 
-                        input_height * input_width * input_channels, 1, false, false);
+  auto* layer = new FConv(outMaps, kW, kH, sW, sH, 0, 0,
+                          (autoPad ? "same" : "valid"), useBias);
+  layer->InputDimensions() = {inH, inW, inC};
+  layer->ComputeOutputDimensions();
 
-    // Create layer directly
-    FConvolution convLayer(num_output_maps, kernel_width, kernel_height,
-                          stride_width, stride_height, 0, 0,
-                          (auto_pad == 1 ? "same" : "valid"), use_bias != 0);
+  arma::fcube wCube(const_cast<float*>(wPtr),
+                    kW, kH, outMaps * inC, false, false);
+  layer->Weight() = wCube;
 
-    convLayer.InputDimensions() = {input_height, input_width, input_channels};
-    convLayer.ComputeOutputDimensions();
+  if (useBias) {
+    arma::fmat bMat(const_cast<float*>(bPtr), outMaps, 1, false, false);
+    layer->Bias() = bMat;
+  }
 
-    // Set weights/bias directly (zero allocation)
-    arma::fcube weightCube(const_cast<float*>(kernel_ptr), 
-                          kernel_width, kernel_height, 
-                          num_output_maps * input_channels, false, false);
-    convLayer.Weight() = weightCube;
-    
-    if (use_bias) {
-        arma::fmat biasMatrix(const_cast<float*>(bias_ptr), num_output_maps, 1, false, false);
-        convLayer.Bias() = biasMatrix;
-    }
+  const auto& od = layer->OutputDimensions();
+  size_t outElems = od[0] * od[1] * od[2];
 
-    // Get output dimensions
-    const auto& outputDims = convLayer.OutputDimensions();
-    *output_height = outputDims[0];
-    *output_width = outputDims[1]; 
-    *output_channels = outputDims[2];
-    
-    // Create output VIEW directly into Scala's pre-allocated memory (zero copy)
-    size_t total_elements = outputDims[0] * outputDims[1] * outputDims[2];
-    arma::fmat outputView(output_ptr, total_elements, 1, false, false);
+  arma::fmat inView (inputPtr,  inH * inW * inC, 1, false, false);
+  arma::fmat outView(outputPtr, outElems,          1, false, false);
 
-    // Perform operation - writes directly to Scala's memory
-    convLayer.Forward(inputData, outputView);
+  return new ConvHandleF{ layer, std::move(inView), std::move(outView) };
 }
 
-void perform_convolution_direct(// Input parameters 
-    size_t num_output_maps, size_t kernel_height, size_t kernel_width,
-    size_t stride_height, size_t stride_width, int auto_pad, int use_bias,
-    
-    // Data pointers
-    const double* input_ptr, size_t input_height, size_t input_width, size_t input_channels,
-    const double* kernel_ptr, const double* bias_ptr,
-    
-    // Direct output - Scala allocates, C++ writes directly
-    double* output_ptr, size_t* output_height, size_t* output_width, size_t* output_channels)
-    {
-    // Create input VIEW (zero copy)
-    arma::mat inputData(const_cast<double*>(input_ptr), 
-                        input_height * input_width * input_channels, 1, false, false);
-
-    // Create layer directly
-    mlpack::Convolution convLayer(num_output_maps, kernel_width, kernel_height,
-                          stride_width, stride_height, 0, 0,
-                          (auto_pad == 1 ? "same" : "valid"), use_bias != 0);
-
-    convLayer.InputDimensions() = {input_height, input_width, input_channels};
-    convLayer.ComputeOutputDimensions();
-
-    // Set weights/bias directly (zero allocation)
-    arma::cube weightCube(const_cast<double*>(kernel_ptr), 
-                          kernel_width, kernel_height, 
-                          num_output_maps * input_channels, false, false);
-    convLayer.Weight() = weightCube;
-    
-    if (use_bias) {
-        arma::mat biasMatrix(const_cast<double*>(bias_ptr), num_output_maps, 1, false, false);
-        convLayer.Bias() = biasMatrix;
-    }
-
-    // Get output dimensions
-    const auto& outputDims = convLayer.OutputDimensions();
-    *output_height = outputDims[0];
-    *output_width = outputDims[1]; 
-    *output_channels = outputDims[2];
-    
-    // Create output VIEW directly into Scala's pre-allocated memory (zero copy)
-    size_t total_elements = outputDims[0] * outputDims[1] * outputDims[2];
-    arma::mat outputView(output_ptr, total_elements, 1, false, false);
-
-    // Perform operation - writes directly to Scala's memory
-    convLayer.Forward(inputData, outputView);
+void execute_conv_f(ConvHandleF* h) {
+  h->layer->Forward(h->inView, h->outView);
 }
 
-
-void F_perform_maxpooling_direct(
-    // Parameters 
-    size_t kernel_height, size_t kernel_width, size_t stride_height, size_t stride_width,
-    
-    // Data pointers  
-    const float* input_ptr, size_t input_height, size_t input_width, size_t input_channels,
-    
-    // Direct output
-    float* output_ptr, size_t* output_height, size_t* output_width, size_t* output_channels)
-{
-    FMaxPooling maxPooling(kernel_width, kernel_height, stride_width, stride_height);
-    maxPooling.InputDimensions() = {input_height, input_width, input_channels};
-    maxPooling.ComputeOutputDimensions();
-    
-    const auto& outputDims = maxPooling.OutputDimensions();
-    *output_height = outputDims[0];
-    *output_width = outputDims[1];
-    *output_channels = outputDims[2];
-
-    // Create views (zero copy)
-    arma::fmat inputView(const_cast<float*>(input_ptr), 
-                        input_height * input_width * input_channels, 1, false, false);
-    
-    size_t total_elements = outputDims[0] * outputDims[1] * outputDims[2];
-    arma::fmat outputView(output_ptr, total_elements, 1, false, false);
-
-    maxPooling.Forward(inputView, outputView);
+void cleanup_conv_f(ConvHandleF* h) {
+  delete h->layer;
+  delete h;
 }
 
-void perform_maxpooling_direct(
-    // Parameters
-    size_t kernel_height, size_t kernel_width, size_t stride_height, size_t stride_width,
-    
-    // Data pointers  
-    const double* input_ptr, size_t input_height, size_t input_width, size_t input_channels,
-    
-    // Direct output
-    double* output_ptr, size_t* output_height, size_t* output_width, size_t* output_channels)
-{
-    mlpack::MaxPooling maxPooling(kernel_width, kernel_height, stride_width, stride_height);
-    maxPooling.InputDimensions() = {input_height, input_width, input_channels};
-    maxPooling.ComputeOutputDimensions();
-    
-    const auto& outputDims = maxPooling.OutputDimensions();
-    *output_height = outputDims[0];
-    *output_width = outputDims[1];
-    *output_channels = outputDims[2];
+// =======================================================
+//                 FLOAT 64-bit CONVOLUTION
+// =======================================================
+ConvHandleD* initialise_conv_d(
+    size_t  outMaps, size_t kH, size_t kW,
+    size_t  sH, size_t sW, int autoPad, int useBias,
+    size_t  inH, size_t inW, size_t inC,
+    const double* wPtr, const double* bPtr,
+    double* inputPtr,  double* outputPtr) {
 
-    // Create views (zero copy)
-    arma::mat inputView(const_cast<double*>(input_ptr), 
-                        input_height * input_width * input_channels, 1, false, false);
-    
-    size_t total_elements = outputDims[0] * outputDims[1] * outputDims[2];
-    arma::mat outputView(output_ptr, total_elements, 1, false, false);
+  auto* layer = new DConv(outMaps, kW, kH, sW, sH, 0, 0,
+                          (autoPad ? "same" : "valid"), useBias);
+  layer->InputDimensions() = {inH, inW, inC};
+  layer->ComputeOutputDimensions();
 
-    maxPooling.Forward(inputView, outputView);
+  arma::cube wCube(const_cast<double*>(wPtr),
+                   kW, kH, outMaps * inC, false, false);
+  layer->Weight() = wCube;
+
+  if (useBias) {
+    arma::mat bMat(const_cast<double*>(bPtr), outMaps, 1, false, false);
+    layer->Bias() = bMat;
+  }
+
+  const auto& od = layer->OutputDimensions();
+  size_t outElems = od[0] * od[1] * od[2];
+
+  arma::mat inView (inputPtr,  inH * inW * inC, 1, false, false);
+  arma::mat outView(outputPtr, outElems,         1, false, false);
+
+  return new ConvHandleD{ layer, std::move(inView), std::move(outView) };
 }
 
+void execute_conv_d(ConvHandleD* h) {
+  h->layer->Forward(h->inView, h->outView);
+}
+
+void cleanup_conv_d(ConvHandleD* h) {
+  delete h->layer;
+  delete h;
+}
+
+// =======================================================
+//                     FLOAT 32-bit MAXPOOL
+// =======================================================
+PoolHandleF* initialise_pool_f(
+    size_t kH, size_t kW,
+    size_t sH, size_t sW,
+    size_t inH, size_t inW, size_t inC,
+    float* inputPtr,  float* outputPtr) {
+
+  auto* layer = new FMaxPooling(kW, kH, sW, sH);
+  layer->InputDimensions() = {inH, inW, inC};
+  layer->ComputeOutputDimensions();
+
+  const auto& od = layer->OutputDimensions();
+  size_t outElems = od[0] * od[1] * od[2];
+
+  arma::fmat inView (inputPtr,  inH * inW * inC, 1, false, false);
+  arma::fmat outView(outputPtr, outElems,         1, false, false);
+
+  return new PoolHandleF{ layer, std::move(inView), std::move(outView) };
+}
+
+void execute_pool_f(PoolHandleF* h) {
+  h->layer->Forward(h->inView, h->outView);
+}
+
+void cleanup_pool_f(PoolHandleF* h) {
+  delete h->layer;
+  delete h;
+}
+
+// =======================================================
+//                     FLOAT 64-bit MAXPOOL
+// =======================================================
+PoolHandleD* initialise_pool_d(
+    size_t kH, size_t kW,
+    size_t sH, size_t sW,
+    size_t inH, size_t inW, size_t inC,
+    double* inputPtr,  double* outputPtr) {
+
+  auto* layer = new DMaxPooling(kW, kH, sW, sH);
+  layer->InputDimensions() = {inH, inW, inC};
+  layer->ComputeOutputDimensions();
+
+  const auto& od = layer->OutputDimensions();
+  size_t outElems = od[0] * od[1] * od[2];
+
+  arma::mat inView (inputPtr,  inH * inW * inC, 1, false, false);
+  arma::mat outView(outputPtr, outElems,         1, false, false);
+
+  return new PoolHandleD{ layer, std::move(inView), std::move(outView) };
+}
+
+void execute_pool_d(PoolHandleD* h) {
+  h->layer->Forward(h->inView, h->outView);
+}
+
+void cleanup_pool_d(PoolHandleD* h) {
+  delete h->layer;
+  delete h;
+}
+
+// =======================================================
+//                          SOFTMAX
+// =======================================================
 void F_perform_softmax_direct(
     const float* input_ptr, size_t input_size,
     float* output_ptr) // Scala pre-allocates same size as input
@@ -207,4 +229,5 @@ void perform_softmax_direct(
     }
 
 } 
-}// extern "C"
+
+} // extern "C"

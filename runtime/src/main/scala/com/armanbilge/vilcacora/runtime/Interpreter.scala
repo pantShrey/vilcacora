@@ -291,8 +291,8 @@ object Interpreter {
       case op: Operation.Cast => Resource.pure(handleCast(op, memory, model))
       case op: Operation.Relu => Resource.pure(handleRelu(op, memory, model))
       case op: Operation.Reshape => Resource.pure(handleReshape(op, memory, model))
-      case op: Operation.Conv => Resource.pure(handleConv(op, memory, model))
-      case op: Operation.MaxPool => Resource.pure(handleMaxPool(op, memory, model))
+      case op: Operation.Conv => handleConv(op, memory, model)
+      case op: Operation.MaxPool => handleMaxPool(op, memory, model)
       case op: Operation.MatMul => Resource.pure(handleMatMul(op, memory, model))
       case op: Operation.Softmax => Resource.pure(handleSoftmax(op, memory, model))
 
@@ -718,7 +718,13 @@ object Interpreter {
     }
   }
 
-  private def handleConv(op: Operation.Conv, memory: MemoryMap, model: ModelIR): IO[Unit] = IO {
+  private def handleConv(
+      op: Operation.Conv,
+      memory: MemoryMap,
+      model: ModelIR,
+  ): Resource[IO, IO[Unit]] = {
+
+    // All your existing shape/pointer extraction logic
     val inputAlloc = model.allocations(op.input)
     val weightAlloc = model.allocations(op.weight)
 
@@ -742,119 +748,142 @@ object Interpreter {
 
     val useBias = if (biasPtrOpt.isDefined) 1 else 0
 
-    // Pointers to store the output dimensions, allocated on the stack
-    val outputHeightPtr = stackalloc[CSize]()
-    val outputWidthPtr = stackalloc[CSize]()
-    val outputChannelsPtr = stackalloc[CSize]()
-
+    // Two-phase Resource pattern
     inputAlloc.dataType match {
       case DataType.Float32 =>
-        MLPack.F_perform_convolution_direct(
-          outputChannels.toUSize,
-          kernelHeight.toUSize,
-          kernelWidth.toUSize,
-          op.strides(0).toUSize,
-          op.strides(1).toUSize,
-          autoPadValue,
-          useBias,
-          inputPtr.asInstanceOf[Ptr[CFloat]],
-          inputHeight.toUSize,
-          inputWidth.toUSize,
-          inputChannels.toUSize,
-          weightPtr.asInstanceOf[Ptr[CFloat]],
-          biasPtrOpt.getOrElse(null).asInstanceOf[Ptr[CFloat]],
-          outputPtr.asInstanceOf[Ptr[CFloat]],
-          outputHeightPtr,
-          outputWidthPtr,
-          outputChannelsPtr,
-        )
+        Resource
+          .make(IO {
+            // Phase 1: Initialize with all your extracted values
+            MLPack.initialise_conv_f(
+              outputChannels.toUSize,
+              kernelHeight.toUSize,
+              kernelWidth.toUSize,
+              op.strides(0).toUSize,
+              op.strides(1).toUSize,
+              autoPadValue,
+              useBias,
+              inputHeight.toUSize,
+              inputWidth.toUSize,
+              inputChannels.toUSize,
+              weightPtr.asInstanceOf[Ptr[Float]],
+              biasPtrOpt.getOrElse(null).asInstanceOf[Ptr[Float]],
+              inputPtr.asInstanceOf[Ptr[Float]],
+              outputPtr.asInstanceOf[Ptr[Float]],
+            )
+          })(handle =>
+            IO {
+              // Phase 3: Cleanup
+              MLPack.cleanup_conv_f(handle)
+            },
+          )
+          .map { handle =>
+            // Phase 2: Execute
+            IO(MLPack.execute_conv_f(handle))
+          }
 
       case DataType.Float64 =>
-        // For Double, we assume CSize and Int are interchangeable for dimensions.
-        val outputHeightPtr = stackalloc[CSize]()
-        val outputWidthPtr = stackalloc[CSize]()
-        val outputChannelsPtr = stackalloc[CSize]()
+        Resource
+          .make(IO {
+            MLPack.initialise_conv_d(
+              outputChannels.toUSize,
+              kernelHeight.toUSize,
+              kernelWidth.toUSize,
+              op.strides(0).toUSize,
+              op.strides(1).toUSize,
+              autoPadValue,
+              useBias,
+              inputHeight.toUSize,
+              inputWidth.toUSize,
+              inputChannels.toUSize,
+              weightPtr.asInstanceOf[Ptr[Double]],
+              biasPtrOpt.getOrElse(null).asInstanceOf[Ptr[Double]],
+              inputPtr.asInstanceOf[Ptr[Double]],
+              outputPtr.asInstanceOf[Ptr[Double]],
+            )
+          })(handle =>
+            IO {
+              MLPack.cleanup_conv_d(handle)
+            },
+          )
+          .map { handle =>
+            IO(MLPack.execute_conv_d(handle))
+          }
 
-        MLPack.perform_convolution_direct(
-          outputChannels.toUSize,
-          kernelHeight.toUSize,
-          kernelWidth.toUSize,
-          op.strides(0).toUSize,
-          op.strides(1).toUSize,
-          autoPadValue,
-          useBias,
-          inputPtr.asInstanceOf[Ptr[CDouble]],
-          inputHeight.toUSize,
-          inputWidth.toUSize,
-          inputChannels.toUSize,
-          weightPtr.asInstanceOf[Ptr[CDouble]],
-          biasPtrOpt.getOrElse(null).asInstanceOf[Ptr[CDouble]],
-          outputPtr.asInstanceOf[Ptr[CDouble]],
-          outputHeightPtr,
-          outputWidthPtr,
-          outputChannelsPtr,
-        )
-      case other => throw new NotImplementedError(s"Conv input data type $other not supported.")
+      case other =>
+        throw new NotImplementedError(s"Conv input data type $other not supported.")
     }
   }
+  private def handleMaxPool(
+      op: Operation.MaxPool,
+      memory: MemoryMap,
+      model: ModelIR,
+  ): Resource[IO, IO[Unit]] = {
 
-  private def handleMaxPool(op: Operation.MaxPool, memory: MemoryMap, model: ModelIR): IO[Unit] =
-    IO {
-      val inputAlloc = model.allocations(op.input)
-      val inputShape = inputAlloc.shape
+    // All your existing extraction logic
+    val inputAlloc = model.allocations(op.input)
+    val inputShape = inputAlloc.shape
 
-      val (inputChannels, inputHeight, inputWidth) = (inputShape(1), inputShape(2), inputShape(3))
-      val (kernelHeight, kernelWidth) = (op.kernelShape(0), op.kernelShape(1))
+    val (inputChannels, inputHeight, inputWidth) = (inputShape(1), inputShape(2), inputShape(3))
+    val (kernelHeight, kernelWidth) = (op.kernelShape(0), op.kernelShape(1))
 
-      val inputPtr = memory(op.input)
-      val outputPtr = memory(op.outputs.head)
+    val inputPtr = memory(op.input)
+    val outputPtr = memory(op.outputs.head)
 
-      // Pointers to store the output dimensions
-      val outputHeightPtr = stackalloc[CSize]()
-      val outputWidthPtr = stackalloc[CSize]()
-      val outputChannelsPtr = stackalloc[CSize]()
-
-      inputAlloc.dataType match {
-        case DataType.Float32 =>
-          MLPack.F_perform_maxpooling_direct(
-            kernelHeight.toUSize,
-            kernelWidth.toUSize,
-            op.strides(0).toUSize,
-            op.strides(1).toUSize,
-            inputPtr.asInstanceOf[Ptr[CFloat]],
-            inputHeight.toUSize,
-            inputWidth.toUSize,
-            inputChannels.toUSize,
-            outputPtr.asInstanceOf[Ptr[CFloat]],
-            outputHeightPtr,
-            outputWidthPtr,
-            outputChannelsPtr,
+    // Two-phase Resource pattern
+    inputAlloc.dataType match {
+      case DataType.Float32 =>
+        Resource
+          .make(IO {
+            // Phase 1: Initialize with all your extracted values
+            MLPack.initialise_pool_f(
+              kernelHeight.toUSize,
+              kernelWidth.toUSize,
+              op.strides(0).toUSize,
+              op.strides(1).toUSize,
+              inputHeight.toUSize,
+              inputWidth.toUSize,
+              inputChannels.toUSize,
+              inputPtr.asInstanceOf[Ptr[Float]],
+              outputPtr.asInstanceOf[Ptr[Float]],
+            )
+          })(handle =>
+            IO {
+              // Phase 3: Cleanup
+              MLPack.cleanup_pool_f(handle)
+            },
           )
+          .map { handle =>
+            // Phase 2: Execute
+            IO(MLPack.execute_pool_f(handle))
+          }
 
-        case DataType.Float64 =>
-          val outputHeightPtr = stackalloc[CSize]()
-          val outputWidthPtr = stackalloc[CSize]()
-          val outputChannelsPtr = stackalloc[CSize]()
-
-          MLPack.perform_maxpooling_direct(
-            kernelHeight.toUSize,
-            kernelWidth.toUSize,
-            op.strides(0).toUSize,
-            op.strides(1).toUSize,
-            inputPtr.asInstanceOf[Ptr[CDouble]],
-            inputHeight.toUSize,
-            inputWidth.toUSize,
-            inputChannels.toUSize,
-            outputPtr.asInstanceOf[Ptr[CDouble]],
-            outputHeightPtr,
-            outputWidthPtr,
-            outputChannelsPtr,
+      case DataType.Float64 =>
+        Resource
+          .make(IO {
+            MLPack.initialise_pool_d(
+              kernelHeight.toUSize,
+              kernelWidth.toUSize,
+              op.strides(0).toUSize,
+              op.strides(1).toUSize,
+              inputHeight.toUSize,
+              inputWidth.toUSize,
+              inputChannels.toUSize,
+              inputPtr.asInstanceOf[Ptr[Double]],
+              outputPtr.asInstanceOf[Ptr[Double]],
+            )
+          })(handle =>
+            IO {
+              MLPack.cleanup_pool_d(handle)
+            },
           )
+          .map { handle =>
+            IO(MLPack.execute_pool_d(handle))
+          }
 
-        case other =>
-          throw new NotImplementedError(s"MaxPool input data type $other not supported.")
-      }
+      case other =>
+        throw new NotImplementedError(s"MaxPool input data type $other not supported.")
     }
+  }
 
   /** Handles Matrix Multiplication using OpenBLAS CBLAS functions. Performs C = A * B where A is
     * [M, K], B is [K, N], and C is [M, N].
