@@ -22,6 +22,7 @@ import scala.scalanative.unsafe._
   */
 
 // Scala Native bindings for the C wrapper functions
+@define("SVM_Wrapper")
 @link("svm")
 @extern
 object LibSVM {

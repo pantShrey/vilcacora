@@ -1,3 +1,4 @@
+#ifdef SVM_Wrapper
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -200,3 +201,4 @@ void debug_model_info(struct svm_model *model) {
 }
 
 } // extern "C"
+#endif

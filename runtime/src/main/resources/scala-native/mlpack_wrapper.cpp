@@ -1,3 +1,4 @@
+#ifdef MLPACK_Wrapper
 #include <mlpack/core.hpp>
 #include <mlpack/methods/ann/layer/convolution.hpp>
 #include <mlpack/methods/ann/layer/max_pooling.hpp>
@@ -231,3 +232,4 @@ void perform_softmax_direct(
 } 
 
 } // extern "C"
+#endif

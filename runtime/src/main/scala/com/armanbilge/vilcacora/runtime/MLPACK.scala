@@ -21,6 +21,7 @@ import scala.scalanative.unsafe._
 /** Scala Native bindings for MLPack C++ wrapper functions Two-phase operations: initialization and
   * execution
   */
+@define("MLPACK_Wrapper")
 @linkCppRuntime
 @extern
 object MLPack {
