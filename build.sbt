@@ -8,7 +8,7 @@ ThisBuild / developers ++= List(
   tlGitHubDev("valencik", "Andrew Valencik"),
 )
 ThisBuild / startYear := Some(2023)
-ThisBuild / tlSonatypeUseLegacyHost := false
+ThisBuild / sonatypeCredentialHost := xerial.sbt.Sonatype.sonatypeCentralHost
 ThisBuild / resolvers += Resolver.sonatypeCentralSnapshots
 
 ThisBuild / crossScalaVersions := Seq("3.3.4", "2.13.16")
@@ -20,7 +20,7 @@ ThisBuild / githubWorkflowBuildPreamble ++= nativeBrewInstallWorkflowSteps.value
 
 ThisBuild / Test / testOptions += Tests.Argument("+l") // for munit logging
 
-val CatsEffectVersion = "3.7.0-RC1"
+val CatsEffectVersion = "3.7.0"
 val CatsVersion = "2.12.0"
 val MunitVersion = "1.0.4"
 lazy val root = tlCrossRootProject.aggregate(ir, onnx, runtime)
@@ -41,6 +41,7 @@ lazy val onnx = project
       "com.thesamet.scalapb" %% "scalapb-runtime" % scalapb.compiler.Version.scalapbVersion % "protobuf",
       "org.typelevel" %%% "cats-core" % CatsVersion,
       "org.scalameta" %%% "munit" % MunitVersion % Test,
+      "org.typelevel" %%% "cats-effect" % CatsEffectVersion,
     ),
     nativeConfig ~= { _.withEmbedResources(true) },
     Compile / PB.generate := (Compile / PB.generate).dependsOn(Compile / downloadOnnxProto).value,
@@ -73,6 +74,7 @@ lazy val runtime = project
       "org.typelevel" %%% "cats-effect" % CatsEffectVersion,
       "org.typelevel" %%% "cats-core" % CatsVersion,
       "org.scalameta" %%% "munit" % MunitVersion % Test,
+      "org.typelevel" %%% "keypool" % "0.5.0-RC1",
     ),
     nativeBrewFormulas ++= Set("cereal", "openblas", "mlpack", "libsvm"),
     nativeConfig ~= { c =>
