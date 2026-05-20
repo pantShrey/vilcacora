@@ -8,11 +8,8 @@ ThisBuild / developers ++= List(
   tlGitHubDev("valencik", "Andrew Valencik"),
 )
 ThisBuild / startYear := Some(2023)
-ThisBuild / sonatypeCredentialHost := xerial.sbt.Sonatype.sonatypeCentralHost
-ThisBuild / resolvers += Resolver.sonatypeCentralSnapshots
 
-ThisBuild / crossScalaVersions := Seq("3.3.4", "2.13.16")
-
+ThisBuild / crossScalaVersions := Seq("3.3.4", "2.13.18")
 ThisBuild / githubWorkflowJavaVersions := Seq(JavaSpec.temurin("21"))
 ThisBuild / githubWorkflowBuildPreamble +=
   WorkflowStep.Run(List("/home/linuxbrew/.linuxbrew/bin/brew update"), name = Some("brew update"))
