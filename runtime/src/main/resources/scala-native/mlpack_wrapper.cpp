@@ -6,15 +6,10 @@
 #include <cstring>
 
 // ---------------- type aliases ----------------
-using FConv = mlpack::ConvolutionType<
-    mlpack::NaiveConvolution<mlpack::ValidConvolution>,
-    mlpack::NaiveConvolution<mlpack::FullConvolution>,
-    mlpack::NaiveConvolution<mlpack::ValidConvolution>,
-    arma::fmat>;
-
-using DConv       = mlpack::Convolution;
-using FMaxPooling = mlpack::MaxPoolingType<arma::fmat>;
-using DMaxPooling = mlpack::MaxPooling;
+using FConv       = mlpack::Convolution<arma::fmat>;
+using DConv       = mlpack::Convolution<arma::mat>;
+using FMaxPooling = mlpack::MaxPooling<arma::fmat>;
+using DMaxPooling = mlpack::MaxPooling<arma::mat>;
 
 // ---------------- handle structs --------------
 struct ConvHandleF {

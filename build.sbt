@@ -76,7 +76,12 @@ lazy val runtime = project
     nativeBrewFormulas ++= Set("cereal", "openblas", "mlpack", "libsvm"),
     nativeConfig ~= { c =>
       c.withCompileOptions(
-        c.compileOptions ++ Seq("-fexceptions", "-frtti", "-Wno-inconsistent-missing-override"),
+        c.compileOptions ++ Seq(
+          "-fexceptions",
+          "-frtti",
+          "-Wno-inconsistent-missing-override",
+          "-DARMA_DONT_USE_WRAPPER",
+        ),
       )
     },
   )
