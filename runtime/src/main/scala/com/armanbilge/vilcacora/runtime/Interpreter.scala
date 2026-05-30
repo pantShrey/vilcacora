@@ -74,37 +74,42 @@ object Interpreter {
     * operation or data type cast is not supported. This ensures the interpreter fails before any
     * memory is allocated or side effects are scheduled.
     */
-  private def validateModel(model: ModelIR): Unit =
+  private def validateModel(model: ModelIR): Unit = {
+
+    def validateBroadcastOp(inputs: List[String], outputs: List[String], opName: String): Unit = {
+      val shapeA = model.allocations(inputs(0)).shape
+      val shapeB = model.allocations(inputs(1)).shape
+      val outputShape = model.allocations(outputs.head).shape
+      val allocA = model.allocations(inputs(0))
+      val allocB = model.allocations(inputs(1))
+      val allocOut = model.allocations(outputs.head)
+
+      require(
+        allocA.dataType == allocB.dataType && allocB.dataType == allocOut.dataType,
+        s"$opName requires all tensors to have the same data type. " +
+          s"Got: ${allocA.dataType}, ${allocB.dataType}, ${allocOut.dataType}",
+      )
+
+      val broadcastedShape = calculateBroadcastShape(shapeA, shapeB)
+      require(
+        broadcastedShape.isDefined,
+        s"$opName inputs are not broadcast compatible: " +
+          s"${shapeA.mkString("x")} and ${shapeB.mkString("x")}",
+      )
+      require(
+        broadcastedShape.contains(outputShape),
+        s"$opName output shape mismatch: " +
+          s"broadcast of inputs gives ${broadcastedShape.get.mkString("x")} " +
+          s"but output is ${outputShape.mkString("x")}",
+      )
+    }
+
     model.operations.foreach {
-      case _: Operation.SVMClassifier | _: Operation.Mul |
+      case _: Operation.SVMClassifier |
           _: Operation.Softmax => // softmax currently here only because axis is ignored
         () // Supported
-      case op: Operation.Add =>
-        // Validate Add operation broadcasting compatibility
-        val shapeA = model.allocations(op.inputs(0)).shape
-        val shapeB = model.allocations(op.inputs(1)).shape
-        val outputShape = model.allocations(op.outputs.head).shape
-
-        // Validate data type compatibility
-        val inputAAlloc = model.allocations(op.inputs(0))
-        val inputBAlloc = model.allocations(op.inputs(1))
-        val outputAlloc = model.allocations(op.outputs.head)
-
-        require(
-          inputAAlloc.dataType == inputBAlloc.dataType &&
-            inputBAlloc.dataType == outputAlloc.dataType,
-          s"Add operation requires all tensors to have the same data type. " +
-            s"Got: ${inputAAlloc.dataType}, ${inputBAlloc.dataType}, ${outputAlloc.dataType}",
-        )
-
-        // Validate broadcasting compatibility
-        val broadcastedShape = calculateBroadcastShape(shapeA, shapeB)
-        require(
-          broadcastedShape.isDefined && broadcastedShape.get == outputShape,
-          s"Add operation broadcasting incompatible: shapes ${shapeA.mkString("x")} and ${shapeB.mkString("x")} " +
-            s"cannot broadcast to output shape ${outputShape.mkString("x")}. " +
-            s"Expected output shape: ${broadcastedShape.map(_.mkString("x")).getOrElse("incompatible")}",
-        )
+      case op: Operation.Add => validateBroadcastOp(op.inputs, op.outputs, "Add")
+      case op: Operation.Mul => validateBroadcastOp(op.inputs, op.outputs, "Mul")
       case op: Operation.Cast =>
         val from = model.allocations(op.input).dataType
         val to = model.allocations(op.output).dataType
@@ -232,9 +237,27 @@ object Interpreter {
         // MLPack does not implement dilation or ceil_mode
         require(op.dilations.forall(_ == 1), "MLPack MaxPool requires dilations = [1,1]")
         require(!op.ceilMode, "MLPack MaxPool does not support ceil_mode = true")
+
+      case op: Operation.Gather =>
+        val inputAlloc = model.allocations(op.input)
+        val indicesAlloc = model.allocations(op.indices)
+        val rank = inputAlloc.shape.length
+        indicesAlloc.dataType match {
+          case DataType.Int32 | DataType.Int64 => () // Supported
+          case unsupported =>
+            throw new IllegalStateException(
+              s"Indices tensor must have data type Int32 or Int64, got: $unsupported",
+            )
+        }
+        require(
+          op.axis >= -rank && op.axis < rank,
+          s"axis must be in range [-$rank, ${rank - 1}], got: ${op.axis}",
+        )
+
       case other =>
         throw new NotImplementedError(s"Operation not implemented: ${other.getClass.getSimpleName}")
     }
+  }
 
   /** A `Resource` that manages all memory for the graph execution.
     *   - Input and output tensors get direct pointers to the memory of their Scala arrays
@@ -295,7 +318,7 @@ object Interpreter {
       case op: Operation.MaxPool => handleMaxPool(op, memory, model)
       case op: Operation.MatMul => Resource.pure(handleMatMul(op, memory, model))
       case op: Operation.Softmax => Resource.pure(handleSoftmax(op, memory, model))
-
+      case op: Operation.Gather => Resource.pure(handleGather(op, memory, model))
       case other =>
         // This case is unreachable due to the pre-validation step.
         // It remains as a safeguard against internal logic errors.
@@ -360,43 +383,51 @@ object Interpreter {
       }
     } else {
       // Broadcasting path: different shapes
-      val outputCount = outputShape.product
+      val outArr = outputShape.toArray
+      val stA = computeBroadcastStrides(shapeA, outArr.length)
+      val stB = computeBroadcastStrides(shapeB, outArr.length)
 
-      // Pre-calculate strides once (since validation confirmed compatibility, we know this will work)
-      val stridesA = calculateStrides(shapeA)
-      val stridesB = calculateStrides(shapeB)
-      val outputStrides = calculateStrides(outputShape)
-
+      var outFlat = 0
       dataType match {
         case DataType.Float32 =>
-          val inputA = memory(op.inputs(0)).asInstanceOf[Ptr[CFloat]]
-          val inputB = memory(op.inputs(1)).asInstanceOf[Ptr[CFloat]]
-          val output = memory(op.outputs.head).asInstanceOf[Ptr[CFloat]]
-
-          var i = 0
-          while (i < outputCount) {
-            val idxA = calculateBroadcastIndex(i, outputShape, shapeA, outputStrides, stridesA)
-            val idxB = calculateBroadcastIndex(i, outputShape, shapeB, outputStrides, stridesB)
-            !(output + i) = !(inputA + idxA) + !(inputB + idxB)
-            i += 1
+          val a = memory(op.inputs(0)).asInstanceOf[Ptr[CFloat]]
+          val b = memory(op.inputs(1)).asInstanceOf[Ptr[CFloat]]
+          val o = memory(op.outputs.head).asInstanceOf[Ptr[CFloat]]
+          broadcastLoopN(outArr, Array(stA, stB)) { idx =>
+            !(o + outFlat) = !(a + idx(0)) + !(b + idx(1))
+            outFlat += 1
           }
 
         case DataType.Float64 =>
-          val inputA = memory(op.inputs(0)).asInstanceOf[Ptr[CDouble]]
-          val inputB = memory(op.inputs(1)).asInstanceOf[Ptr[CDouble]]
-          val output = memory(op.outputs.head).asInstanceOf[Ptr[CDouble]]
+          val a = memory(op.inputs(0)).asInstanceOf[Ptr[CDouble]]
+          val b = memory(op.inputs(1)).asInstanceOf[Ptr[CDouble]]
+          val o = memory(op.outputs.head).asInstanceOf[Ptr[CDouble]]
+          broadcastLoopN(outArr, Array(stA, stB)) { idx =>
+            !(o + outFlat) = !(a + idx(0)) + !(b + idx(1))
+            outFlat += 1
+          }
 
-          var i = 0
-          while (i < outputCount) {
-            val idxA = calculateBroadcastIndex(i, outputShape, shapeA, outputStrides, stridesA)
-            val idxB = calculateBroadcastIndex(i, outputShape, shapeB, outputStrides, stridesB)
-            !(output + i) = !(inputA + idxA) + !(inputB + idxB)
-            i += 1
+        case DataType.Int32 =>
+          val a = memory(op.inputs(0)).asInstanceOf[Ptr[CInt]]
+          val b = memory(op.inputs(1)).asInstanceOf[Ptr[CInt]]
+          val o = memory(op.outputs.head).asInstanceOf[Ptr[CInt]]
+          broadcastLoopN(outArr, Array(stA, stB)) { idx =>
+            !(o + outFlat) = !(a + idx(0)) + !(b + idx(1))
+            outFlat += 1
+          }
+
+        case DataType.Int64 =>
+          val a = memory(op.inputs(0)).asInstanceOf[Ptr[CLongLong]]
+          val b = memory(op.inputs(1)).asInstanceOf[Ptr[CLongLong]]
+          val o = memory(op.outputs.head).asInstanceOf[Ptr[CLongLong]]
+          broadcastLoopN(outArr, Array(stA, stB)) { idx =>
+            !(o + outFlat) = !(a + idx(0)) + !(b + idx(1))
+            outFlat += 1
           }
 
         case unsupported =>
           throw new NotImplementedError(
-            s"Broadcast Add operation not implemented for data type: $unsupported",
+            s"Broadcast Add not implemented for data type: $unsupported",
           )
       }
     }
@@ -404,56 +435,91 @@ object Interpreter {
 
   /** Handles element-wise multiplication for both Float32 and Float64 tensors. */
   private def handleMul(op: Operation.Mul, memory: MemoryMap, model: ModelIR): IO[Unit] = IO {
-    val count = model.allocations(op.outputs.head).shape.product
-    val inputAAlloc = model.allocations(op.inputs(0))
+    val shapeA = model.allocations(op.inputs(0)).shape
+    val shapeB = model.allocations(op.inputs(1)).shape
+    val outputShape = model.allocations(op.outputs.head).shape
+    val dataType = model.allocations(op.inputs(0)).dataType
 
-    inputAAlloc.dataType match {
-      case DataType.Float32 =>
-        val inputA = memory(op.inputs(0)).asInstanceOf[Ptr[CFloat]]
-        val inputB = memory(op.inputs(1)).asInstanceOf[Ptr[CFloat]]
-        val output = memory(op.outputs.head).asInstanceOf[Ptr[CFloat]]
+    if (shapeA == shapeB) {
+      // ── Fast path ──────────────────────────────────────────────────────────
+      val count = outputShape.product
+      dataType match {
+        case DataType.Float32 =>
+          val a = memory(op.inputs(0)).asInstanceOf[Ptr[CFloat]]
+          val b = memory(op.inputs(1)).asInstanceOf[Ptr[CFloat]]
+          val o = memory(op.outputs.head).asInstanceOf[Ptr[CFloat]]
+          var i = 0; while (i < count) { !(o + i) = !(a + i) * !(b + i); i += 1 }
 
-        var i = 0
-        while (i < count) {
-          !(output + i) = !(inputA + i) * !(inputB + i)
-          i += 1
-        }
+        case DataType.Float64 =>
+          val a = memory(op.inputs(0)).asInstanceOf[Ptr[CDouble]]
+          val b = memory(op.inputs(1)).asInstanceOf[Ptr[CDouble]]
+          val o = memory(op.outputs.head).asInstanceOf[Ptr[CDouble]]
+          var i = 0; while (i < count) { !(o + i) = !(a + i) * !(b + i); i += 1 }
 
-      case DataType.Float64 =>
-        val inputA = memory(op.inputs(0)).asInstanceOf[Ptr[CDouble]]
-        val inputB = memory(op.inputs(1)).asInstanceOf[Ptr[CDouble]]
-        val output = memory(op.outputs.head).asInstanceOf[Ptr[CDouble]]
+        case DataType.Int32 =>
+          val a = memory(op.inputs(0)).asInstanceOf[Ptr[CInt]]
+          val b = memory(op.inputs(1)).asInstanceOf[Ptr[CInt]]
+          val o = memory(op.outputs.head).asInstanceOf[Ptr[CInt]]
+          var i = 0; while (i < count) { !(o + i) = !(a + i) * !(b + i); i += 1 }
 
-        var i = 0
-        while (i < count) {
-          !(output + i) = !(inputA + i) * !(inputB + i)
-          i += 1
-        }
+        case DataType.Int64 =>
+          val a = memory(op.inputs(0)).asInstanceOf[Ptr[CLongLong]]
+          val b = memory(op.inputs(1)).asInstanceOf[Ptr[CLongLong]]
+          val o = memory(op.outputs.head).asInstanceOf[Ptr[CLongLong]]
+          var i = 0; while (i < count) { !(o + i) = !(a + i) * !(b + i); i += 1 }
 
-      case DataType.Int32 =>
-        val inputA = memory(op.inputs(0)).asInstanceOf[Ptr[CInt]]
-        val inputB = memory(op.inputs(1)).asInstanceOf[Ptr[CInt]]
-        val output = memory(op.outputs.head).asInstanceOf[Ptr[CInt]]
+        case unsupported =>
+          throw new NotImplementedError(s"Mul not implemented for data type: $unsupported")
+      }
+    } else {
+      // ── Broadcast path ─────────────────────────────────────────────────────
+      val outArr = outputShape.toArray
+      val stA = computeBroadcastStrides(shapeA, outArr.length)
+      val stB = computeBroadcastStrides(shapeB, outArr.length)
 
-        var i = 0
-        while (i < count) {
-          !(output + i) = !(inputA + i) * !(inputB + i)
-          i += 1
-        }
+      var outFlat = 0
+      dataType match {
+        case DataType.Float32 =>
+          val a = memory(op.inputs(0)).asInstanceOf[Ptr[CFloat]]
+          val b = memory(op.inputs(1)).asInstanceOf[Ptr[CFloat]]
+          val o = memory(op.outputs.head).asInstanceOf[Ptr[CFloat]]
+          broadcastLoopN(outArr, Array(stA, stB)) { idx =>
+            !(o + outFlat) = !(a + idx(0)) * !(b + idx(1))
+            outFlat += 1
+          }
 
-      case DataType.Int64 =>
-        val inputA = memory(op.inputs(0)).asInstanceOf[Ptr[CLongLong]]
-        val inputB = memory(op.inputs(1)).asInstanceOf[Ptr[CLongLong]]
-        val output = memory(op.outputs.head).asInstanceOf[Ptr[CLongLong]]
+        case DataType.Float64 =>
+          val a = memory(op.inputs(0)).asInstanceOf[Ptr[CDouble]]
+          val b = memory(op.inputs(1)).asInstanceOf[Ptr[CDouble]]
+          val o = memory(op.outputs.head).asInstanceOf[Ptr[CDouble]]
+          broadcastLoopN(outArr, Array(stA, stB)) { idx =>
+            !(o + outFlat) = !(a + idx(0)) * !(b + idx(1))
+            outFlat += 1
+          }
 
-        var i = 0
-        while (i < count) {
-          !(output + i) = !(inputA + i) * !(inputB + i)
-          i += 1
-        }
+        case DataType.Int32 =>
+          val a = memory(op.inputs(0)).asInstanceOf[Ptr[CInt]]
+          val b = memory(op.inputs(1)).asInstanceOf[Ptr[CInt]]
+          val o = memory(op.outputs.head).asInstanceOf[Ptr[CInt]]
+          broadcastLoopN(outArr, Array(stA, stB)) { idx =>
+            !(o + outFlat) = !(a + idx(0)) * !(b + idx(1))
+            outFlat += 1
+          }
 
-      case unsupported =>
-        throw new NotImplementedError(s"Mul operation not implemented for data type: $unsupported")
+        case DataType.Int64 =>
+          val a = memory(op.inputs(0)).asInstanceOf[Ptr[CLongLong]]
+          val b = memory(op.inputs(1)).asInstanceOf[Ptr[CLongLong]]
+          val o = memory(op.outputs.head).asInstanceOf[Ptr[CLongLong]]
+          broadcastLoopN(outArr, Array(stA, stB)) { idx =>
+            !(o + outFlat) = !(a + idx(0)) * !(b + idx(1))
+            outFlat += 1
+          }
+
+        case unsupported =>
+          throw new NotImplementedError(
+            s"Broadcast Mul not implemented for data type: $unsupported",
+          )
+      }
     }
   }
 
@@ -973,40 +1039,123 @@ object Interpreter {
       }
     }
 
+  private def handleGather(op: Operation.Gather, memory: MemoryMap, model: ModelIR): IO[Unit] = IO {
+    val dataAlloc = model.allocations(op.input)
+    val indicesAlloc = model.allocations(op.indices)
+    val dataShape = dataAlloc.shape
+    val elemSize = dataAlloc.dataType.sizeInBytes // bytes per scalar
+
+    // Normalise axis (ONNX allows negative)
+    val rank = dataShape.length
+    val axis = if (op.axis < 0) op.axis + rank else op.axis
+
+    val outerSize = dataShape.take(axis).product // product of dims before axis
+    val axisSize = dataShape(axis) // extent we index into
+    val innerSize = dataShape.drop(axis + 1).product // contiguous block after axis
+    val numIndices = indicesAlloc.shape.product
+
+    val dataPtr = memory(op.input)
+    val idxPtr = memory(op.indices)
+    val outputPtr = memory(op.output)
+
+    var outer = 0
+    while (outer < outerSize) {
+      var i = 0
+      while (i < numIndices) {
+
+        // read the index
+        val rawIdx = indicesAlloc.dataType match {
+          case DataType.Int32 => (!(idxPtr.asInstanceOf[Ptr[CInt]] + i)).toLong
+          case DataType.Int64 => !(idxPtr.asInstanceOf[Ptr[CLongLong]] + i)
+          case other =>
+            throw new IllegalStateException(
+              s"Unexpected index dtype: $other",
+            ) // should not reach due to early validation
+        }
+        // wrap around for -ve indices
+        val idx = if (rawIdx < 0) rawIdx + axisSize else rawIdx
+        require(
+          idx >= 0 && idx < axisSize,
+          s"Gather index $rawIdx out of bounds for axis size $axisSize",
+        )
+
+        val srcOffset = (outer * axisSize + idx) * innerSize
+        val dstOffset = (outer * numIndices + i) * innerSize
+        val byteCount = (innerSize * elemSize).toUSize
+
+        memcpy(
+          outputPtr + dstOffset * elemSize,
+          dataPtr + srcOffset * elemSize,
+          byteCount,
+        )
+        i += 1
+      }
+      outer += 1
+    }
+  }
+
   /** Calculate row-major strides for a given shape */
-  private def calculateStrides(shape: List[Int]): List[Int] = {
+  private def calculateStrides(shape: List[Int]): Array[Int] = {
     val strides = Array.fill(shape.length)(1)
     for (i <- shape.length - 2 to 0 by -1)
       strides(i) = strides(i + 1) * shape(i + 1)
-    strides.toList
+    strides
   }
 
-  /** Calculate input index from output linear index considering broadcasting with pre-computed
-    * strides
-    */
-  private def calculateBroadcastIndex(
-      linearIndex: Int,
-      outputShape: List[Int],
-      inputShape: List[Int],
-      outputStrides: List[Int],
-      inputStrides: List[Int],
-  ): Int = {
-    // Pad input shape with leading 1s
-    val paddedInput = List.fill(outputShape.length - inputShape.length)(1) ++ inputShape
-    val paddedInputStrides = List.fill(outputShape.length - inputStrides.length)(0) ++ inputStrides
+  /** Returns Broadcast strides calculated against an output rank, stride = 0 for dim 1 */
+  private def computeBroadcastStrides(inputShape: List[Int], outputRank: Int): Array[Int] = {
+    val strides = Array.fill(outputRank)(0)
+    val offset = outputRank - inputShape.length
+    val rawStrides = calculateStrides(inputShape)
 
-    var remaining = linearIndex
-    var inputIndex = 0
+    for (i <- inputShape.indices)
+      strides(offset + i) = if (inputShape(i) == 1) 0 else rawStrides(i)
 
-    for (dim <- outputShape.indices) {
-      val coord = remaining / outputStrides(dim)
-      remaining = remaining % outputStrides(dim)
-
-      // If input dimension is 1, it's broadcasted (use coordinate 0)
-      val inputCoord = if (paddedInput(dim) == 1) 0 else coord
-      inputIndex += inputCoord * paddedInputStrides(dim)
+    strides
+  }
+  private def broadcastLoopN(
+      outputShape: Array[Int],
+      inputStrides: Array[Array[Int]],
+  )(operation: Array[Int] => Unit): Unit = {
+    val rank = outputShape.length
+    val outputCount = {
+      var p = 1; var i = 0
+      while (i < rank) { p *= outputShape(i); i += 1 }
+      p
     }
+    val numInputs = inputStrides.length
+    val coords = new Array[Int](rank)
+    val inputIndices = new Array[Int](numInputs)
 
-    inputIndex
+    var flat = 0
+    while (flat < outputCount) {
+      operation(inputIndices)
+
+      var dim = rank - 1
+      while (dim >= 0) {
+        coords(dim) += 1
+
+        var t = 0
+        while (t < numInputs) {
+          inputIndices(t) += inputStrides(t)(dim)
+          t += 1
+        }
+
+        if (coords(dim) < outputShape(dim)) {
+          dim = -1
+        } else {
+
+          coords(dim) = 0
+          val extent = outputShape(dim)
+          var t2 = 0
+          while (t2 < numInputs) {
+            inputIndices(t2) -= inputStrides(t2)(dim) * extent
+            t2 += 1
+          }
+          dim -= 1
+        }
+      }
+      flat += 1
+    }
   }
 }

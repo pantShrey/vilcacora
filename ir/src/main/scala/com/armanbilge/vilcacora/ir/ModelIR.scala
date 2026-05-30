@@ -262,6 +262,194 @@ object Operation {
     override def inputs: List[String] = List(input)
     override def outputs: List[String] = List(output)
   }
+
+  /** Represents a Gather operation. */
+  final case class Gather(
+      input: String,
+      indices: String,
+      output: String,
+
+      // --- Attributes ---
+      axis: Int = 0,
+  ) extends Operation {
+    override def inputs: List[String] = List(input, indices)
+    override def outputs: List[String] = List(output)
+  }
+
+  /** Represents a And operation. */
+  final case class And(inputA: String, inputB: String, output: String) extends Operation {
+    override def inputs: List[String] = List(inputA, inputB)
+    override def outputs: List[String] = List(output)
+  }
+
+  /** Represents a BiasGelu operation */
+  final case class BiasGelu(input: String, bias: String, output: String) extends Operation {
+    override def inputs: List[String] = List(input, bias)
+    override def outputs: List[String] = List(output)
+  }
+
+  /** Represents Clip operation */
+  final case class Clip(input: String, min: Option[String], max: Option[String], output: String)
+      extends Operation {
+    override def inputs: List[String] = List(input) ++ min.toList ++ max.toList
+    override def outputs: List[String] = List(output)
+  }
+
+  /** Represent Concat operatino */
+  final case class Concat(
+      tensors: List[String],
+      output: String,
+      // attributes
+      axis: Int,
+  ) extends Operation {
+    override def inputs: List[String] = tensors
+    override def outputs: List[String] = List(output)
+  }
+
+  final case class Expand(input: String, shape: String, output: String) extends Operation {
+    override def inputs: List[String] = List(input, shape)
+
+    override def outputs: List[String] = List(output)
+
+  }
+
+  final case class GatherElements(
+      input: String,
+      indices: String,
+      output: String,
+      // attributes
+
+      axis: Int = 0,
+  ) extends Operation {
+    override def inputs: List[String] = List(input, indices)
+
+    override def outputs: List[String] = List(output)
+
+  }
+  final case class GatherND(
+      input: String,
+      indices: String,
+      output: String,
+      // attributes
+
+      batchDims: Int = 0,
+  ) extends Operation {
+    override def inputs: List[String] = List(input, indices)
+
+    override def outputs: List[String] = List(output)
+
+  }
+  final case class GreaterOrEqual(inputA: String, inputB: String, output: String)
+      extends Operation {
+    override def inputs: List[String] = List(inputA, inputB)
+    override def outputs: List[String] = List(output)
+  }
+
+  final case class LayerNormalization(
+      input: String,
+      scale: String,
+      bias: Option[String],
+      output: String,
+      mean: Option[String],
+      inverseStdDeviation: Option[String],
+      // attributes
+      axis: Int = -1,
+      epsilon: Float = 1e-05f,
+      stashType: Int = 1,
+  ) extends Operation {
+    override def inputs: List[String] = List(input, scale) ++ bias.toList
+
+    override def outputs: List[String] = List(output) ++ mean.toList ++ inverseStdDeviation.toList
+
+  }
+
+  final case class Max(tensors: List[String], output: String) extends Operation {
+    override def inputs: List[String] = tensors
+    override def outputs: List[String] = List(output)
+  }
+
+  final case class Range(start: String, limit: String, delta: String, output: String)
+      extends Operation {
+    override def inputs: List[String] = List(start, limit, delta)
+
+    override def outputs: List[String] = List(output)
+
+  }
+
+  final case class ReduceL2(
+      input: String,
+      axes: Option[String],
+      output: String,
+      keepDims: Int = 1,
+      noopWithEmptyAxes: Int = 0,
+  ) extends Operation {
+    override def inputs: List[String] = List(input) ++ axes.toList
+
+    override def outputs: List[String] = List(output)
+
+  }
+
+  final case class ReduceSum(
+      input: String,
+      axes: Option[String],
+      output: String,
+      keepDims: Int = 1,
+      noopWithEmptyAxes: Int = 0,
+  ) extends Operation {
+    override def inputs: List[String] = List(input) ++ axes.toList
+
+    override def outputs: List[String] = List(output)
+
+  }
+  final case class Shape(input: String, output: String, end: Option[Int], start: Int = 0)
+      extends Operation {
+    override def inputs: List[String] = List(input)
+
+    override def outputs: List[String] = List(output)
+
+  }
+  final case class Slice(
+      input: String,
+      starts: String,
+      ends: String,
+      axes: Option[String],
+      steps: Option[String],
+      output: String,
+  ) extends Operation {
+    override def inputs: List[String] = List(input, starts, ends) ++ axes.toList ++ steps.toList
+
+    override def outputs: List[String] = List(output)
+
+  }
+  final case class Squeeze(input: String, axes: Option[String], output: String) extends Operation {
+    override def inputs: List[String] = List(input) ++ axes.toList
+
+    override def outputs: List[String] = List(output)
+
+  }
+
+  final case class Transpose(input: String, output: String, perm: List[Int]) extends Operation {
+    override def inputs: List[String] = List(input)
+
+    override def outputs: List[String] = List(output)
+
+  }
+
+  final case class Unsqueeze(input: String, axes: String, output: String) extends Operation {
+    override def inputs: List[String] = List(input, axes)
+
+    override def outputs: List[String] = List(output)
+
+  }
+
+  final case class Where(condition: String, inputA: String, inputB: String, output: String)
+      extends Operation {
+    override def inputs: List[String] = List(condition, inputA, inputB)
+
+    override def outputs: List[String] = List(output)
+
+  }
+
   // Add more operations here...
 }
 

@@ -115,6 +115,34 @@ class InterpreterSuite extends FunSuite {
     assertEquals(output.toSeq, expected.toSeq)
   }
 
+  /** Test Mul operation with broadcasting */
+  test("Mul operation with broadcasting should perform element-wise multiplication") {
+    // (1,1)
+    // (2,2)
+    val inputA = Array(1, 1, 2, 2)
+    // (3,4)
+    val inputB = Array(3, 4)
+    val model = ModelIR(
+      name = "test_mul_broadcast",
+      operations = List(
+        Operation.Mul("inputA", "inputB", "output"),
+      ),
+      allocations = Map(
+        "inputA" -> Allocation("inputA", DataType.Int32, List(2, 2)),
+        "inputB" -> Allocation("inputB", DataType.Int32, List(2)),
+        "output" -> Allocation("output", DataType.Int32, List(2, 2)),
+      ),
+      graphInputs = List("inputA", "inputB"),
+      graphOutputs = List("output"),
+    )
+
+    val inputs = Map("inputA" -> inputA, "inputB" -> inputB)
+    val result = Interpreter.execute(model, inputs).use(identity).unsafeRunSync()
+    val output = result("output").asInstanceOf[Array[Int]]
+    val expected = Array(3, 4, 6, 8)
+    assertEquals(output.toSeq, expected.toSeq)
+  }
+
   /** Test Cast operation from Float64 to Float32 */
   test("Cast operation should convert Float64 to Float32 with appropriate precision loss") {
     val input = Array(1.123456789, 2.987654321, 3.141592653)
@@ -518,6 +546,52 @@ class InterpreterSuite extends FunSuite {
     output.zip(expected).foreach { case (actual, exp) =>
       assertEqualsFloat(actual, exp, 1e-5f)
     }
+  }
+
+  /** Test Gather operation */
+  test("Gather operation should select elements correctly") {
+    val data = Array(1.0f, 1.2f, 2.3f, 3.4f, 4.5f, 5.7f)
+
+    val indices = Array(0, 1, 1, 2)
+
+    val inputs = Map(
+      "data" -> data,
+      "indices" -> indices,
+    )
+    val model = ModelIR(
+      name = "gather_test",
+      operations = List(
+        Operation.Gather(
+          input = "data",
+          indices = "indices",
+          output = "output",
+        ),
+      ),
+      allocations = Map(
+        "data" -> Allocation("data", DataType.Float32, List(3, 2)),
+        "indices" -> Allocation("indices", DataType.Int32, List(2, 2)),
+        "output" -> Allocation("output", DataType.Float32, List(2, 2, 2)),
+      ),
+      graphInputs = List("data", "indices"),
+      graphOutputs = List("output"),
+    )
+
+    val results = Interpreter.execute(model, inputs).use(_.map(identity)).unsafeRunSync()
+    val output = results("output").asInstanceOf[Array[Float]]
+
+    // output[0][0] = data[0] = [1.0, 1.2]
+    // output[0][1] = data[1] = [2.3, 3.4]
+    // output[1][0] = data[1] = [2.3, 3.4]
+    // output[1][1] = data[2] = [4.5, 5.7]
+    val expected = Array(
+      1.0f, 1.2f, // output[0][0]
+      2.3f, 3.4f, // output[0][1]
+      2.3f, 3.4f, // output[1][0]
+      4.5f, 5.7f, // output[1][1]
+    )
+
+    assertEquals(output.toList, expected.toList)
+
   }
 
   /** Test a more complex graph with multiple operations */

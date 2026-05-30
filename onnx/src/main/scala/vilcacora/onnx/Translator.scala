@@ -164,7 +164,7 @@ object Translator {
     val attributes = new OnnxAttributeHelper(node)
     node.opType match {
       // Group simple binary operators
-      case "MatMul" | "Add" | "Mul" | "Div" =>
+      case "MatMul" | "Add" | "Mul" | "Div" | "And" | "BiasGelu" | "Expand" | "GreaterOrEqual" =>
         for {
           // The arity check ensures the .head and (1) accessors below are safe.
           _ <- checkArity(node, expectedInputs = 2, expectedOutputs = 1)
@@ -174,6 +174,13 @@ object Translator {
             case "Add" => Right(Operation.Add(node.input.head, node.input(1), node.output.head))
             case "Mul" => Right(Operation.Mul(node.input.head, node.input(1), node.output.head))
             case "Div" => Right(Operation.Div(node.input.head, node.input(1), node.output.head))
+            case "And" => Right(Operation.And(node.input.head, node.input(1), node.output.head))
+            case "BiasGelu" =>
+              Right(Operation.BiasGelu(node.input.head, node.input(1), node.output.head))
+            case "Expand" =>
+              Right(Operation.Expand(node.input.head, node.input(1), node.output.head))
+            case "GreaterOrEqual" =>
+              Right(Operation.GreaterOrEqual(node.input.head, node.input(1), node.output.head))
             case _ => Left("Internal error: Unreachable code in operator matching")
           }
         } yield op
@@ -361,6 +368,237 @@ object Translator {
           input = node.input.head,
           output = node.output.head,
           axis = axis.toInt,
+        )
+
+      case "Gather" =>
+        for {
+          _ <- checkArity(node, expectedInputs = 2, expectedOutputs = 1)
+          axis = node.attribute.find(_.name == "axis").map(_.i).getOrElse(0L)
+        } yield Operation.Gather(
+          input = node.input.head,
+          indices = node.input(1),
+          output = node.output.head,
+          axis = axis.toInt,
+        )
+      case "GatherElements" =>
+        for {
+          _ <- checkArity(node, expectedInputs = 2, expectedOutputs = 1)
+          axis = node.attribute.find(_.name == "axis").map(_.i).getOrElse(0L)
+        } yield Operation.GatherElements(
+          input = node.input.head,
+          indices = node.input(1),
+          output = node.output.head,
+          axis = axis.toInt,
+        )
+      case "GatherND" =>
+        for {
+          _ <- checkArity(node, expectedInputs = 2, expectedOutputs = 1)
+          batchDims = node.attribute.find(_.name == "batch_dims").map(_.i).getOrElse(0L)
+        } yield Operation.GatherND(
+          input = node.input.head,
+          indices = node.input(1),
+          output = node.output.head,
+          batchDims = batchDims.toInt,
+        )
+
+      case "Clip" =>
+        for {
+          _ <-
+            if (node.input.size <= 3 && node.input.size >= 1 && node.output.size == 1) Right(())
+            else
+              Left(
+                s"Node '${node.name}' (opType: Clip) expects at least 1 input and atmost 3 inputs and  1 output, but got ${node.input.size} and ${node.output.size}",
+              )
+          input = node.input.head
+          min = node.input.lift(1)
+          max = node.input.lift(2)
+          output = node.output.head
+        } yield Operation.Clip(input, min, max, output)
+
+      case "Concat" =>
+        for {
+          _ <-
+            if (node.input.size >= 1 && node.output.size == 1) Right(())
+            else
+              Left(
+                s"Node '${node.name}' (opType: Concat) expects at least 1 input  and  1 output, but got ${node.input.size} and ${node.output.size} ",
+              )
+          tensors = node.input.toList
+          output = node.output.head
+          axis <- attributes.getInt("axis")
+        } yield Operation.Concat(
+          tensors,
+          output,
+          axis.toInt,
+        )
+
+      case "LayerNormalization" =>
+        for {
+          _ <-
+            if (
+              node.input.size <= 3 && node.input.size >= 2 && node.output.size >= 1 && node.output.size <= 3
+            ) Right(())
+            else
+              Left(
+                s"Node '${node.name}' (opType: LayerNormalization) expects at least 2 input and atmost 3 inputs and  atleast 1 output and atmost 3 output, but got ${node.input.size} and ${node.output.size}",
+              )
+          input = node.input.head
+          scale = node.input(1)
+          bias = node.input.lift(2)
+          output = node.output.head
+          mean = node.output.lift(1)
+          inverseStdDeviation = node.output.lift(2)
+          axis = node.attribute.find(_.name == "axis").map(_.i).getOrElse(-1L)
+          epsilon = node.attribute.find(_.name == "epsilon").map(_.f).getOrElse(1e-05f)
+          stashType = node.attribute.find(_.name == "stash_type").map(_.i).getOrElse(1L)
+        } yield Operation.LayerNormalization(
+          input,
+          scale,
+          bias,
+          output,
+          mean,
+          inverseStdDeviation,
+          axis.toInt,
+          epsilon.toFloat,
+          stashType.toInt,
+        )
+
+      case "Max" =>
+        for {
+          _ <-
+            if (node.input.size >= 1 && node.output.size == 1) Right(())
+            else
+              Left(
+                s"Node '${node.name}' (opType: Max) expects at least 1 input  and  1 output, but got ${node.input.size} and ${node.output.size} ",
+              )
+          tensors = node.input.toList
+          output = node.output.head
+        } yield Operation.Max(
+          tensors,
+          output,
+        )
+
+      case "Range" =>
+        for {
+          _ <- checkArity(node, 3, 1)
+
+        } yield Operation.Range(node.input.head, node.input(1), node.input(2), node.output.head)
+
+      case "ReduceL2" =>
+        for {
+          _ <-
+            if (node.input.size >= 1 && node.input.size <= 2 && node.output.size == 1) Right(())
+            else
+              Left(
+                s"Node '${node.name}' (opType: ReduceL2) expects 1-2 inputs and 1 output, but got ${node.input.size} and ${node.output.size}",
+              )
+          keepDims = node.attribute.find(_.name == "keepdims").map(_.i).getOrElse(1L)
+          noopWithEmptyAxes = node.attribute
+            .find(_.name == "noop_with_empty_axes")
+            .map(_.i)
+            .getOrElse(0L)
+        } yield Operation.ReduceL2(
+          input = node.input.head,
+          axes = node.input.lift(1),
+          output = node.output.head,
+          keepDims = keepDims.toInt,
+          noopWithEmptyAxes = noopWithEmptyAxes.toInt,
+        )
+
+      case "ReduceSum" =>
+        for {
+          _ <-
+            if (node.input.size >= 1 && node.input.size <= 2 && node.output.size == 1) Right(())
+            else
+              Left(
+                s"Node '${node.name}' (opType: ReduceSum) expects 1-2 inputs and 1 output, but got ${node.input.size} and ${node.output.size}",
+              )
+          keepDims = node.attribute.find(_.name == "keepdims").map(_.i).getOrElse(1L)
+          noopWithEmptyAxes = node.attribute
+            .find(_.name == "noop_with_empty_axes")
+            .map(_.i)
+            .getOrElse(0L)
+        } yield Operation.ReduceSum(
+          input = node.input.head,
+          axes = node.input.lift(1),
+          output = node.output.head,
+          keepDims = keepDims.toInt,
+          noopWithEmptyAxes = noopWithEmptyAxes.toInt,
+        )
+
+      case "Shape" =>
+        for {
+          _ <- checkArity(node, expectedInputs = 1, expectedOutputs = 1)
+          start = node.attribute.find(_.name == "start").map(_.i).getOrElse(0L)
+          end = node.attribute.find(_.name == "end").map(_.i.toInt)
+        } yield Operation.Shape(
+          input = node.input.head,
+          output = node.output.head,
+          end = end,
+          start = start.toInt,
+        )
+
+      case "Slice" =>
+        for {
+          _ <-
+            if (node.input.size >= 3 && node.input.size <= 5 && node.output.size == 1) Right(())
+            else
+              Left(
+                s"Node '${node.name}' (opType: Slice) expects 3-5 inputs and 1 output, but got ${node.input.size} and ${node.output.size}",
+              )
+        } yield Operation.Slice(
+          input = node.input.head,
+          starts = node.input(1),
+          ends = node.input(2),
+          axes = node.input.lift(3),
+          steps = node.input.lift(4),
+          output = node.output.head,
+        )
+
+      case "Squeeze" =>
+        for {
+          _ <-
+            if (node.input.size >= 1 && node.input.size <= 2 && node.output.size == 1) Right(())
+            else
+              Left(
+                s"Node '${node.name}' (opType: Squeeze) expects 1-2 inputs and 1 output, but got ${node.input.size} and ${node.output.size}",
+              )
+        } yield Operation.Squeeze(
+          input = node.input.head,
+          axes = node.input.lift(1),
+          output = node.output.head,
+        )
+
+      case "Transpose" =>
+        for {
+          _ <- checkArity(node, expectedInputs = 1, expectedOutputs = 1)
+          perm = node.attribute
+            .find(_.name == "perm")
+            .map(_.ints.map(_.toInt).toList)
+            .getOrElse(List.empty)
+        } yield Operation.Transpose(
+          input = node.input.head,
+          output = node.output.head,
+          perm = perm,
+        )
+
+      case "Unsqueeze" =>
+        for {
+          _ <- checkArity(node, expectedInputs = 2, expectedOutputs = 1)
+        } yield Operation.Unsqueeze(
+          input = node.input.head,
+          axes = node.input(1),
+          output = node.output.head,
+        )
+
+      case "Where" =>
+        for {
+          _ <- checkArity(node, expectedInputs = 3, expectedOutputs = 1)
+        } yield Operation.Where(
+          condition = node.input.head,
+          inputA = node.input(1),
+          inputB = node.input(2),
+          output = node.output.head,
         )
       case unsupported => Left(s"Unsupported operation type: $unsupported")
     }

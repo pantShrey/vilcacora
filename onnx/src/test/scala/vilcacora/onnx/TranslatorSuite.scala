@@ -37,6 +37,11 @@ class TranslatorSuite extends FunSuite {
     assertEquals(Translator.translateNode(node), Right(Operation.Add("X", "Y", "Z")))
   }
 
+  test("translateNode should translate a Mul node") {
+    val node = NodeProto(opType = "Mul", input = Seq("A", "B"), output = Seq("C"))
+    assertEquals(Translator.translateNode(node), Right(Operation.Mul("A", "B", "C")))
+  }
+
   test("translateNode should translate a Cast node") {
     val node = NodeProto(
       opType = "Cast",
@@ -96,6 +101,7 @@ class TranslatorSuite extends FunSuite {
       case other => fail(s"Expected SVMClassifier but got $other")
     }
   }
+
   test("translateNode should translate a Div node") {
     val node =
       NodeProto(opType = "Div", input = Seq("Numerator", "Denominator"), output = Seq("Quotient"))
@@ -188,6 +194,24 @@ class TranslatorSuite extends FunSuite {
     assertEquals(Translator.translateNode(node), Right(expected))
   }
 
+  test("translateNode should translate a Conv node without bias") {
+    val node = NodeProto(
+      opType = "Conv",
+      input = Seq("X", "W"), // No bias
+      output = Seq("Y"),
+      attribute = Seq(
+        AttributeProto(name = "kernel_shape", ints = Seq(1L, 1L)),
+      ),
+    )
+
+    val result = Translator.translateNode(node)
+    assert(result.isRight, "Conv without bias failed")
+    result.foreach {
+      case op: Operation.Conv => assertEquals(op.bias, None)
+      case other => fail(s"Expected Conv but got $other")
+    }
+  }
+
   test("translateNode should translate a MaxPool node") {
     val node = NodeProto(
       opType = "MaxPool",
@@ -218,6 +242,7 @@ class TranslatorSuite extends FunSuite {
 
     assertEquals(Translator.translateNode(node), Right(expected))
   }
+
   test("translateNode should translate a Softmax node with default axis") {
     val node = NodeProto(
       opType = "Softmax",
@@ -262,6 +287,539 @@ class TranslatorSuite extends FunSuite {
       Translator.translateNode(node),
       Right(Operation.Softmax("batch_logits", "batch_probs", axis = 0)),
     )
+  }
+
+  test("translateNode should handle Gather with axis") {
+    val node = NodeProto(
+      opType = "Gather",
+      input = List("input_tensor", "indices"),
+      output = List("output_tensor"),
+      attribute = List(
+        AttributeProto(name = "axis", i = 1L, `type` = AttributeProto.AttributeType.INT),
+      ),
+    )
+
+    assertEquals(
+      Translator.translateNode(node),
+      Right(
+        Operation.Gather(
+          input = "input_tensor",
+          indices = "indices",
+          output = "output_tensor",
+          axis = 1,
+        ),
+      ),
+    )
+  }
+
+  test("translateNode should handle Gather with default axis") {
+    val node = NodeProto(
+      opType = "Gather",
+      input = List("input_tensor", "indices"),
+      output = List("output_tensor"),
+    )
+
+    assertEquals(
+      Translator.translateNode(node),
+      Right(
+        Operation.Gather(
+          input = "input_tensor",
+          indices = "indices",
+          output = "output_tensor",
+          axis = 0,
+        ),
+      ),
+    )
+  }
+
+  test("translateNode should translate an And node") {
+    val node = NodeProto(opType = "And", input = Seq("A", "B"), output = Seq("C"))
+    assertEquals(Translator.translateNode(node), Right(Operation.And("A", "B", "C")))
+  }
+
+  test("translateNode should translate a BiasGelu node") {
+    val node = NodeProto(opType = "BiasGelu", input = Seq("X", "bias"), output = Seq("Y"))
+    assertEquals(Translator.translateNode(node), Right(Operation.BiasGelu("X", "bias", "Y")))
+  }
+
+  test("translateNode should translate a Clip node with all inputs") {
+    val node = NodeProto(
+      opType = "Clip",
+      input = Seq("input", "min_val", "max_val"),
+      output = Seq("clipped"),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.Clip("input", Some("min_val"), Some("max_val"), "clipped")),
+    )
+  }
+
+  test("translateNode should translate a Clip node with only min") {
+    val node = NodeProto(
+      opType = "Clip",
+      input = Seq("input", "min_val"),
+      output = Seq("clipped"),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.Clip("input", Some("min_val"), None, "clipped")),
+    )
+  }
+
+  test("translateNode should translate a Clip node with no min or max") {
+    val node = NodeProto(opType = "Clip", input = Seq("input"), output = Seq("clipped"))
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.Clip("input", None, None, "clipped")),
+    )
+  }
+
+  test("translateNode should translate a Concat node with multiple inputs") {
+    val node = NodeProto(
+      opType = "Concat",
+      input = Seq("T1", "T2", "T3"),
+      output = Seq("out"),
+      attribute = Seq(
+        AttributeProto(name = "axis", i = 1L, `type` = AttributeProto.AttributeType.INT),
+      ),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.Concat(List("T1", "T2", "T3"), "out", axis = 1)),
+    )
+  }
+
+  test("translateNode should translate a Concat node with negative axis") {
+    val node = NodeProto(
+      opType = "Concat",
+      input = Seq("A", "B"),
+      output = Seq("out"),
+      attribute = Seq(
+        AttributeProto(name = "axis", i = -1L, `type` = AttributeProto.AttributeType.INT),
+      ),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.Concat(List("A", "B"), "out", axis = -1)),
+    )
+  }
+
+  test("translateNode should translate an Expand node") {
+    val node = NodeProto(opType = "Expand", input = Seq("input", "shape"), output = Seq("output"))
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.Expand("input", "shape", "output")),
+    )
+  }
+
+  test("translateNode should translate a GatherElements node with default axis") {
+    val node = NodeProto(
+      opType = "GatherElements",
+      input = Seq("data", "indices"),
+      output = Seq("output"),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.GatherElements("data", "indices", "output", axis = 0)),
+    )
+  }
+
+  test("translateNode should translate a GatherElements node with explicit axis") {
+    val node = NodeProto(
+      opType = "GatherElements",
+      input = Seq("data", "indices"),
+      output = Seq("output"),
+      attribute = Seq(
+        AttributeProto(name = "axis", i = 2L, `type` = AttributeProto.AttributeType.INT),
+      ),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.GatherElements("data", "indices", "output", axis = 2)),
+    )
+  }
+
+  test("translateNode should translate a GatherND node with default batchDims") {
+    val node = NodeProto(
+      opType = "GatherND",
+      input = Seq("data", "indices"),
+      output = Seq("output"),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.GatherND("data", "indices", "output", batchDims = 0)),
+    )
+  }
+
+  test("translateNode should translate a GatherND node with explicit batchDims") {
+    val node = NodeProto(
+      opType = "GatherND",
+      input = Seq("data", "indices"),
+      output = Seq("output"),
+      attribute = Seq(
+        AttributeProto(name = "batch_dims", i = 1L, `type` = AttributeProto.AttributeType.INT),
+      ),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.GatherND("data", "indices", "output", batchDims = 1)),
+    )
+  }
+
+  test("translateNode should translate a GreaterOrEqual node") {
+    val node = NodeProto(opType = "GreaterOrEqual", input = Seq("A", "B"), output = Seq("C"))
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.GreaterOrEqual("A", "B", "C")),
+    )
+  }
+
+  test("translateNode should translate a LayerNormalization node with all inputs and outputs") {
+    val node = NodeProto(
+      opType = "LayerNormalization",
+      input = Seq("input", "scale", "bias"),
+      output = Seq("Y", "mean", "inv_std_dev"),
+      attribute = Seq(
+        AttributeProto(name = "axis", i = -1L, `type` = AttributeProto.AttributeType.INT),
+        AttributeProto(name = "epsilon", f = 1e-5f, `type` = AttributeProto.AttributeType.FLOAT),
+        AttributeProto(name = "stash_type", i = 1L, `type` = AttributeProto.AttributeType.INT),
+      ),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(
+        Operation.LayerNormalization(
+          input = "input",
+          scale = "scale",
+          bias = Some("bias"),
+          output = "Y",
+          mean = Some("mean"),
+          inverseStdDeviation = Some("inv_std_dev"),
+          axis = -1,
+          epsilon = 1e-5f,
+          stashType = 1,
+        ),
+      ),
+    )
+  }
+
+  test("translateNode should translate a LayerNormalization node with required inputs only") {
+    // Only input + scale, no bias; only Y output, no mean or invStdDev
+    val node = NodeProto(
+      opType = "LayerNormalization",
+      input = Seq("input", "scale"),
+      output = Seq("Y"),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(
+        Operation.LayerNormalization(
+          input = "input",
+          scale = "scale",
+          bias = None,
+          output = "Y",
+          mean = None,
+          inverseStdDeviation = None,
+        ),
+      ),
+    )
+  }
+
+  test("translateNode should translate a Max node with multiple inputs") {
+    val node = NodeProto(
+      opType = "Max",
+      input = Seq("A", "B", "C"),
+      output = Seq("max_out"),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.Max(List("A", "B", "C"), "max_out")),
+    )
+  }
+
+  test("translateNode should translate a Max node with a single input") {
+    val node = NodeProto(opType = "Max", input = Seq("A"), output = Seq("out"))
+    assertEquals(Translator.translateNode(node), Right(Operation.Max(List("A"), "out")))
+  }
+
+  test("translateNode should translate a Range node") {
+    val node = NodeProto(
+      opType = "Range",
+      input = Seq("start", "limit", "delta"),
+      output = Seq("output"),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.Range("start", "limit", "delta", "output")),
+    )
+  }
+
+  test("translateNode should translate a ReduceL2 node with axes input") {
+    val node = NodeProto(
+      opType = "ReduceL2",
+      input = Seq("data", "axes"),
+      output = Seq("reduced"),
+      attribute = Seq(
+        AttributeProto(name = "keepdims", i = 1L, `type` = AttributeProto.AttributeType.INT),
+      ),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(
+        Operation.ReduceL2(
+          input = "data",
+          axes = Some("axes"),
+          output = "reduced",
+          keepDims = 1,
+          noopWithEmptyAxes = 0,
+        ),
+      ),
+    )
+  }
+
+  test("translateNode should translate a ReduceL2 node without axes and keepDims=0") {
+    val node = NodeProto(
+      opType = "ReduceL2",
+      input = Seq("data"),
+      output = Seq("reduced"),
+      attribute = Seq(
+        AttributeProto(name = "keepdims", i = 0L, `type` = AttributeProto.AttributeType.INT),
+      ),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.ReduceL2("data", None, "reduced", keepDims = 0, noopWithEmptyAxes = 0)),
+    )
+  }
+
+  test("translateNode should translate a ReduceSum node with axes input") {
+    val node = NodeProto(
+      opType = "ReduceSum",
+      input = Seq("data", "axes"),
+      output = Seq("sum_out"),
+      attribute = Seq(
+        AttributeProto(name = "keepdims", i = 1L, `type` = AttributeProto.AttributeType.INT),
+        AttributeProto(
+          name = "noop_with_empty_axes",
+          i = 1L,
+          `type` = AttributeProto.AttributeType.INT,
+        ),
+      ),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(
+        Operation.ReduceSum(
+          input = "data",
+          axes = Some("axes"),
+          output = "sum_out",
+          keepDims = 1,
+          noopWithEmptyAxes = 1,
+        ),
+      ),
+    )
+  }
+
+  test("translateNode should translate a ReduceSum node without axes") {
+    val node = NodeProto(opType = "ReduceSum", input = Seq("data"), output = Seq("out"))
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.ReduceSum("data", None, "out", keepDims = 1, noopWithEmptyAxes = 0)),
+    )
+  }
+
+  test("translateNode should translate a Shape node with default start") {
+    val node = NodeProto(opType = "Shape", input = Seq("data"), output = Seq("shape_out"))
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.Shape("data", "shape_out", end = None, start = 0)),
+    )
+  }
+
+  test("translateNode should translate a Shape node with start and end attributes") {
+    val node = NodeProto(
+      opType = "Shape",
+      input = Seq("data"),
+      output = Seq("shape_out"),
+      attribute = Seq(
+        AttributeProto(name = "start", i = 1L, `type` = AttributeProto.AttributeType.INT),
+        AttributeProto(name = "end", i = 3L, `type` = AttributeProto.AttributeType.INT),
+      ),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.Shape("data", "shape_out", end = Some(3), start = 1)),
+    )
+  }
+
+  test("translateNode should translate a Slice node with required inputs only") {
+    val node = NodeProto(
+      opType = "Slice",
+      input = Seq("data", "starts", "ends"),
+      output = Seq("sliced"),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(
+        Operation.Slice(
+          input = "data",
+          starts = "starts",
+          ends = "ends",
+          axes = None,
+          steps = None,
+          output = "sliced",
+        ),
+      ),
+    )
+  }
+
+  test("translateNode should translate a Slice node with axes and steps") {
+    val node = NodeProto(
+      opType = "Slice",
+      input = Seq("data", "starts", "ends", "axes", "steps"),
+      output = Seq("sliced"),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(
+        Operation.Slice(
+          input = "data",
+          starts = "starts",
+          ends = "ends",
+          axes = Some("axes"),
+          steps = Some("steps"),
+          output = "sliced",
+        ),
+      ),
+    )
+  }
+
+  test("translateNode should translate a Slice node with axes but no steps") {
+    val node = NodeProto(
+      opType = "Slice",
+      input = Seq("data", "starts", "ends", "axes"),
+      output = Seq("sliced"),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(
+        Operation.Slice(
+          input = "data",
+          starts = "starts",
+          ends = "ends",
+          axes = Some("axes"),
+          steps = None,
+          output = "sliced",
+        ),
+      ),
+    )
+  }
+
+  test("translateNode should translate a Squeeze node with axes input") {
+    val node = NodeProto(
+      opType = "Squeeze",
+      input = Seq("data", "axes"),
+      output = Seq("squeezed"),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.Squeeze("data", Some("axes"), "squeezed")),
+    )
+  }
+
+  test("translateNode should translate a Squeeze node without axes") {
+    val node = NodeProto(opType = "Squeeze", input = Seq("data"), output = Seq("squeezed"))
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.Squeeze("data", None, "squeezed")),
+    )
+  }
+
+  test("translateNode should translate a Transpose node with explicit perm") {
+    val node = NodeProto(
+      opType = "Transpose",
+      input = Seq("X"),
+      output = Seq("Y"),
+      attribute = Seq(
+        AttributeProto(
+          name = "perm",
+          ints = Seq(0L, 2L, 1L),
+          `type` = AttributeProto.AttributeType.INTS,
+        ),
+      ),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.Transpose("X", "Y", perm = List(0, 2, 1))),
+    )
+  }
+
+  test("translateNode should translate a Transpose node with no perm (reverse all dims)") {
+    // Absent perm means reverse all dimensions; we represent this as empty list
+    val node = NodeProto(opType = "Transpose", input = Seq("X"), output = Seq("Y"))
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.Transpose("X", "Y", perm = List.empty)),
+    )
+  }
+
+  test("translateNode should translate an Unsqueeze node") {
+    val node = NodeProto(
+      opType = "Unsqueeze",
+      input = Seq("data", "axes"),
+      output = Seq("expanded"),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.Unsqueeze("data", "axes", "expanded")),
+    )
+  }
+
+  test("translateNode should translate a Where node") {
+    val node = NodeProto(
+      opType = "Where",
+      input = Seq("condition", "X", "Y"),
+      output = Seq("output"),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.Where("condition", "X", "Y", "output")),
+    )
+  }
+
+  // --- Arity / error handling tests ---
+
+  test("translateNode should fail for a MatMul node with wrong arity") {
+    val node = NodeProto(opType = "MatMul", input = Seq("A"), output = Seq("C"))
+    assert(Translator.translateNode(node).isLeft, "Expected Left for wrong-arity MatMul")
+  }
+
+  test("translateNode should fail for a Range node with too few inputs") {
+    val node = NodeProto(opType = "Range", input = Seq("start", "limit"), output = Seq("output"))
+    assert(Translator.translateNode(node).isLeft, "Expected Left for Range with only 2 inputs")
+  }
+
+  test("translateNode should fail for a Slice node with too few inputs") {
+    val node = NodeProto(opType = "Slice", input = Seq("data", "starts"), output = Seq("out"))
+    assert(Translator.translateNode(node).isLeft, "Expected Left for Slice missing ends")
+  }
+
+  test("translateNode should fail for a Concat node with no inputs") {
+    val node = NodeProto(
+      opType = "Concat",
+      input = Seq.empty,
+      output = Seq("out"),
+      attribute = Seq(AttributeProto(name = "axis", i = 0L)),
+    )
+    assert(Translator.translateNode(node).isLeft, "Expected Left for Concat with no inputs")
+  }
+
+  test("translateNode should return Left for an unsupported operation type") {
+    val node = NodeProto(opType = "UnknownOp", input = Seq("X"), output = Seq("Y"))
+    assert(Translator.translateNode(node).isLeft, "Expected Left for unsupported op")
+    Translator.translateNode(node).left.foreach { err =>
+      assert(err.contains("Unsupported operation type"), s"Unexpected error message: $err")
+    }
   }
 
   // --- End-to-end tests using model files from resources ---
