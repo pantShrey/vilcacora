@@ -813,7 +813,53 @@ class TranslatorSuite extends FunSuite {
     )
     assert(Translator.translateNode(node).isLeft, "Expected Left for Concat with no inputs")
   }
+  test("translateNode should translate an Erf node") {
+    val node = NodeProto(opType = "Erf", input = Seq("X"), output = Seq("Y"))
+    assertEquals(Translator.translateNode(node), Right(Operation.Erf("X", "Y")))
+  }
 
+  test("translateNode should translate an IsNaN node") {
+    val node = NodeProto(opType = "IsNaN", input = Seq("X"), output = Seq("Y"))
+    assertEquals(Translator.translateNode(node), Right(Operation.IsNaN("X", "Y")))
+  }
+
+  test("translateNode should translate a Tanh node") {
+    val node = NodeProto(opType = "Tanh", input = Seq("X"), output = Seq("Y"))
+    assertEquals(Translator.translateNode(node), Right(Operation.Tanh("X", "Y")))
+  }
+
+  test("translateNode should translate a Gemm node with all inputs and explicit attributes") {
+    val node = NodeProto(
+      opType = "Gemm",
+      input = Seq("A", "B", "C"),
+      output = Seq("Y"),
+      attribute = Seq(
+        AttributeProto(name = "alpha", f = 0.5f, `type` = AttributeProto.AttributeType.FLOAT),
+        AttributeProto(name = "beta", f = 2.0f, `type` = AttributeProto.AttributeType.FLOAT),
+        AttributeProto(name = "transA", i = 1L, `type` = AttributeProto.AttributeType.INT),
+        AttributeProto(name = "transB", i = 0L, `type` = AttributeProto.AttributeType.INT),
+      ),
+    )
+    assertEquals(
+      Translator.translateNode(node),
+      Right(
+        Operation.Gemm("A", "B", Some("C"), "Y", alpha = 0.5f, beta = 2.0f, transA = 1, transB = 0),
+      ),
+    )
+  }
+
+  test("translateNode should translate a Gemm node without bias and default attributes") {
+    val node = NodeProto(opType = "Gemm", input = Seq("A", "B"), output = Seq("Y"))
+    assertEquals(
+      Translator.translateNode(node),
+      Right(Operation.Gemm("A", "B", None, "Y", alpha = 1f, beta = 1f, transA = 0, transB = 0)),
+    )
+  }
+
+  test("translateNode should fail for a Gemm node with wrong arity") {
+    val node = NodeProto(opType = "Gemm", input = Seq("A"), output = Seq("Y"))
+    assert(Translator.translateNode(node).isLeft, "Expected Left for Gemm with only 1 input")
+  }
   test("translateNode should return Left for an unsupported operation type") {
     val node = NodeProto(opType = "UnknownOp", input = Seq("X"), output = Seq("Y"))
     assert(Translator.translateNode(node).isLeft, "Expected Left for unsupported op")

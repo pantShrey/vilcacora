@@ -450,6 +450,40 @@ object Operation {
 
   }
 
+  final case class Erf(input: String, output: String) extends Operation {
+    override def inputs: List[String] = List(input)
+
+    override def outputs: List[String] = List(output)
+
+  }
+  final case class Gemm(
+      inputA: String,
+      inputB: String,
+      inputC: Option[String],
+      output: String,
+      alpha: Float = 1f,
+      beta: Float = 1f,
+      transA: Int = 0,
+      transB: Int = 0,
+  ) extends Operation {
+    override def inputs: List[String] = List(inputA, inputB) ++ inputC.toList
+
+    override def outputs: List[String] = List(output)
+
+  }
+
+  final case class IsNaN(input: String, output: String) extends Operation {
+    override def inputs: List[String] = List(input)
+
+    override def outputs: List[String] = List(output)
+
+  }
+  final case class Tanh(input: String, output: String) extends Operation {
+    override def inputs: List[String] = List(input)
+
+    override def outputs: List[String] = List(output)
+
+  }
   // Add more operations here...
 }
 

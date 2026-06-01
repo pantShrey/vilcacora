@@ -600,6 +600,54 @@ object Translator {
           inputB = node.input(2),
           output = node.output.head,
         )
+
+      case "Erf" =>
+        for {
+          _ <- checkArity(node, expectedInputs = 1, expectedOutputs = 1)
+        } yield Operation.Erf(
+          input = node.input.head,
+          output = node.output.head,
+        )
+
+      case "IsNaN" =>
+        for {
+          _ <- checkArity(node, expectedInputs = 1, expectedOutputs = 1)
+        } yield Operation.IsNaN(
+          input = node.input.head,
+          output = node.output.head,
+        )
+
+      case "Tanh" =>
+        for {
+          _ <- checkArity(node, expectedInputs = 1, expectedOutputs = 1)
+        } yield Operation.Tanh(
+          input = node.input.head,
+          output = node.output.head,
+        )
+
+      case "Gemm" =>
+        for {
+          _ <-
+            if (node.input.size >= 2 && node.input.size <= 3 && node.output.size == 1) Right(())
+            else
+              Left(
+                s"Node '${node.name}' (opType: Gemm) expects 2-3 inputs and 1 output, but got ${node.input.size} and ${node.output.size}",
+              )
+          alpha = node.attribute.find(_.name == "alpha").map(_.f).getOrElse(1f)
+          beta = node.attribute.find(_.name == "beta").map(_.f).getOrElse(1f)
+          transA = node.attribute.find(_.name == "transA").map(_.i.toInt).getOrElse(0)
+          transB = node.attribute.find(_.name == "transB").map(_.i.toInt).getOrElse(0)
+        } yield Operation.Gemm(
+          inputA = node.input.head,
+          inputB = node.input(1),
+          inputC = node.input.lift(2),
+          output = node.output.head,
+          alpha = alpha,
+          beta = beta,
+          transA = transA,
+          transB = transB,
+        )
+
       case unsupported => Left(s"Unsupported operation type: $unsupported")
     }
   }
