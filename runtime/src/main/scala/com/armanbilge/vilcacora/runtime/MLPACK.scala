@@ -107,12 +107,15 @@ object MLPack {
   /* ---- softmax ---- */
   def F_perform_softmax_direct(
       input_ptr: Ptr[CFloat],
-      input_size: CSize,
-      output_ptr: Ptr[CFloat], // Same size as input
+      outer_size: CSize,
+      inner_size: CSize,
+      output_ptr: Ptr[CFloat],
   ): Unit = extern
+
   def perform_softmax_direct(
       input_ptr: Ptr[Double],
-      input_size: CSize,
-      output_ptr: Ptr[Double], // Same size as input
+      outer_size: CSize,
+      inner_size: CSize,
+      output_ptr: Ptr[Double],
   ): Unit = extern
 }

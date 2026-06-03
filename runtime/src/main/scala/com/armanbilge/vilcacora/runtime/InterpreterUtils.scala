@@ -52,6 +52,7 @@ object InterpreterUtils {
       case DataType.Float64 => new Array[Double](size)
       case DataType.Int32 => new Array[Int](size)
       case DataType.Int64 => new Array[Long](size)
+      case DataType.Bool => new Array[Boolean](size)
       case other =>
         throw new IllegalArgumentException(s"Unsupported data type: $other")
     }

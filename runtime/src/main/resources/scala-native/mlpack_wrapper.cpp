@@ -191,40 +191,56 @@ void cleanup_pool_d(PoolHandleD* h) {
 //                          SOFTMAX
 // =======================================================
 void F_perform_softmax_direct(
-    const float* input_ptr, size_t input_size,
-    float* output_ptr) // Scala pre-allocates same size as input
-{
-    // Direct computation - no intermediate allocations
-    float max_val = *std::max_element(input_ptr, input_ptr + input_size);
-    
-    float sum = 0.0f;
-    for (size_t i = 0; i < input_size; ++i) {
-        output_ptr[i] = std::exp(input_ptr[i] - max_val);
-        sum += output_ptr[i];
-    }
-    
-    for (size_t i = 0; i < input_size; ++i) {
-        output_ptr[i] /= sum;
-    }
-}
-void perform_softmax_direct(
-    const double* input_ptr, size_t input_size,
-    double* output_ptr) // Scala pre-allocates same size as input
-{
-    // Direct computation - no intermediate allocations
-    double max_val = *std::max_element(input_ptr, input_ptr + input_size);
-    
-    double sum = 0.0;
-    for (size_t i = 0; i < input_size; ++i) {
-        output_ptr[i] = std::exp(input_ptr[i] - max_val);
-        sum += output_ptr[i];
-    }
-    
-    for (size_t i = 0; i < input_size; ++i) {
-        output_ptr[i] /= sum;
+        const float* input_ptr, 
+        size_t outer_size, 
+        size_t inner_size,
+        float* output_ptr) 
+    {
+        for (size_t o = 0; o < outer_size; ++o) {
+            size_t offset = o * inner_size;
+            const float* in_row = input_ptr + offset;
+            float* out_row = output_ptr + offset;
+
+            // Find max for numerical stability (calculated per row)
+            float max_val = *std::max_element(in_row, in_row + inner_size);
+            
+            float sum = 0.0f;
+            for (size_t i = 0; i < inner_size; ++i) {
+                out_row[i] = std::exp(in_row[i] - max_val);
+                sum += out_row[i];
+            }
+            
+            // Normalize the row
+            for (size_t i = 0; i < inner_size; ++i) {
+                out_row[i] /= sum;
+            }
+        }
     }
 
-} 
+    void perform_softmax_direct(
+        const double* input_ptr, 
+        size_t outer_size, 
+        size_t inner_size,
+        double* output_ptr) 
+    {
+        for (size_t o = 0; o < outer_size; ++o) {
+            size_t offset = o * inner_size;
+            const double* in_row = input_ptr + offset;
+            double* out_row = output_ptr + offset;
+
+            double max_val = *std::max_element(in_row, in_row + inner_size);
+            
+            double sum = 0.0;
+            for (size_t i = 0; i < inner_size; ++i) {
+                out_row[i] = std::exp(in_row[i] - max_val);
+                sum += out_row[i];
+            }
+            
+            for (size_t i = 0; i < inner_size; ++i) {
+                out_row[i] /= sum;
+            }
+        }
+    }
 
 } // extern "C"
 #endif
